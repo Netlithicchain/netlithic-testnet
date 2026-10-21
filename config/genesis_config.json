@@ -1,0 +1,73 @@
+{
+  "_readme": "Genesis settings. chain_id here is the single source of truth: wallets sign with it, nodes verify against it and refuse peers on a different one. Every node must use the same file; changing anything here creates a different genesis block (a different chain). The allocation addresses are real Ed25519 addresses whose keys the founder holds offline (placeholder: false); they are locked by the time-lock rules. Time-lock, payout and approval numbers are PROPOSED DEFAULTS for the founder to confirm (see docs/ECONOMIC_DESIGN.md).",
+  "chain_id": "netlithic-dev-1",
+  "genesis_timestamp": 1700000000.0,
+  "decimals": 8,
+  "max_supply_nlt": 1000000000,
+  "allocations": {
+    "community": {
+      "percent": 60,
+      "address": "f953a95407a5ae8bba986101d1f9b272",
+      "placeholder": false,
+      "locked": true,
+      "unlock": {
+        "start_month": 0,
+        "months": 240,
+        "_note": "monthly over 20 years; paid out only by protocol epochs"
+      }
+    },
+    "treasury": {
+      "percent": 15,
+      "address": "e26742c7bcdb96fa0ca9446073b04a35",
+      "placeholder": false,
+      "locked": true,
+      "unlock": {
+        "start_month": 0,
+        "months": 48,
+        "_note": "incl. ops/dev fund; monthly over 4 years"
+      }
+    },
+    "reserve": {
+      "percent": 5,
+      "address": "65ca7858ba65ee7a27d8b2879197d973",
+      "placeholder": false,
+      "locked": true,
+      "unlock": {
+        "start_month": 12,
+        "months": 72,
+        "_note": "1-year cliff, then monthly over 6 years"
+      }
+    }
+  },
+  "miner_rewards": {
+    "percent": 20,
+    "minted_at_genesis": false,
+    "initial_reward_nlt": 10,
+    "halving_interval_blocks": 10000000
+  },
+  "time": {
+    "blocks_per_month": 175200,
+    "_note": "30.4 days of 15-second blocks"
+  },
+  "community_payouts": {
+    "epoch_blocks": 175200,
+    "per_address_cap_nlt": 25000,
+    "vesting_epochs": 6,
+    "_note": "Each epoch, the unlocked-but-unpaid community pool is split pro rata by contribution points earned in that epoch, capped per address; the excess stays in the pool. Payouts vest linearly over vesting_epochs."
+  },
+  "treasury_spend_approval": {
+    "mode": "none",
+    "_note": "Default: no treasury/reserve spends are possible at all. M-of-N multisig is built but off: to use it, set mode to \"multisig\", a threshold (proposed 3) and a keyholders list of real Ed25519 public keys of independent people, at least two of whom are not the founder (mark the founder's own entry founder: true). Keyholders marked test_key and mode single_key_dev are refused unless chain_id starts with netlithic-dev. Founder pay comes from revenue, not the treasury."
+  },
+  "fees": {
+    "min_fee_base_units": 10000,
+    "_note": "Proposal: minimum fee per transfer = 0.0001 NLT (8 decimals). The sender pays amount + fee; the miner of the block collects all fees on top of the block reward. Fees move existing coins, they never mint new ones, so the 1B cap is unaffected. Miners pick the highest-fee transfers first."
+  },
+  "contribution_points": {
+    "per_block_mined_tenths": 25,
+    "per_tx_sent_tenths": 10,
+    "min_transfer_base_units": 100000000,
+    "pair_cap_per_epoch": 10,
+    "_note": "Points are stored in tenths: 25 = 2.5 points per mined block, 10 = 1 point per transfer sent. A block with no transfers (or only miner-to-self transfers) earns 0 mining points. Anti-farming (proposal): a transfer earns points only if amount >= min_transfer_base_units (1 NLT), it is not to the sender itself, and at most pair_cap_per_epoch transfers per sender->recipient pair per epoch earn points."
+  }
+}

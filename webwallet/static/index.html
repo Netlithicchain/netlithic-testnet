@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Netlithic Wallet (Test Network)</title>
+<link rel="stylesheet" href="/wallet.css">
+<link rel="icon" href="/logo.png">
+</head>
+<body>
+<div class="banner">TEST NETWORK: these coins have no value. Practice freely.</div>
+<header><img src="/logo.png" alt="" width="40" height="40"><h1>Netlithic Wallet</h1></header>
+<main>
+<p id="msg" class="msg" role="status" aria-live="polite" hidden></p>
+
+<section id="v-start" hidden>
+  <h2>Welcome</h2>
+  <p>A wallet is like a small digital purse. It gives you an address (like an account number) that people can send coins to. Only you can spend from it.</p>
+  <button id="b-create" class="big">Create my wallet</button>
+  <p class="or">Already have one?</p>
+  <button id="b-show-restore" class="plain">Bring back my wallet</button>
+</section>
+
+<section id="v-create" hidden>
+  <h2>Choose a password</h2>
+  <p>This password locks your wallet on this device. We never see it and can't reset it.</p>
+  <label>Password (at least 10 characters)<input id="c-pass" type="password" autocomplete="new-password"></label>
+  <label>Type it again<input id="c-pass2" type="password" autocomplete="new-password"></label>
+  <button id="b-create-go" class="big">Continue</button>
+  <button class="plain b-back">Back</button>
+</section>
+
+<section id="v-backup" hidden>
+  <h2>Write down your backup code</h2>
+  <p>If you lose this device or clear your browser, this code is the <b>only</b> way to get your wallet back. Write it on paper and keep it somewhere safe. Never share it with anyone, and nobody from Netlithic will ever ask for it.</p>
+  <p id="backup-code" class="code"></p>
+  <button id="b-download" class="plain">Also download a locked backup file</button>
+  <label class="check"><input id="c-wrote" type="checkbox"> I wrote down my backup code</label>
+  <button id="b-backup-done" class="big" disabled>Open my wallet</button>
+</section>
+
+<section id="v-restore" hidden>
+  <h2>Bring back your wallet</h2>
+  <p>Type your backup code, <b>or</b> pick your backup file.</p>
+  <label>Backup code<input id="r-code" type="text" autocomplete="off" spellcheck="false" placeholder="abcd-1234-..."></label>
+  <label>Or backup file<input id="r-file" type="file" accept=".json,application/json"></label>
+  <label>Password (for the backup file, and to lock the wallet on this device)<input id="r-pass" type="password" autocomplete="new-password"></label>
+  <button id="b-restore-go" class="big">Bring it back</button>
+  <button class="plain b-back">Back</button>
+</section>
+
+<section id="v-unlock" hidden>
+  <h2>Unlock your wallet</h2>
+  <label>Password<input id="u-pass" type="password" autocomplete="current-password"></label>
+  <button id="b-unlock" class="big">Unlock</button>
+  <button id="b-forget" class="plain danger">Remove wallet from this device</button>
+</section>
+
+<section id="v-home" hidden>
+  <div class="card">
+    <div class="label">Your balance</div>
+    <div class="balance"><span id="h-balance">…</span> <small>test NLT</small></div>
+    <div class="label">Contribution points: <span id="h-points">…</span></div>
+  </div>
+  <div class="card">
+    <div class="label">Your address (share this to receive coins)</div>
+    <p id="h-address" class="code small"></p>
+    <button id="b-copy" class="plain">Copy address</button>
+  </div>
+  <button id="b-drip" class="big">Get free test coins</button>
+  <div class="card">
+    <h2>Send coins</h2>
+    <label>Send to (their address)<input id="s-to" type="text" autocomplete="off" spellcheck="false" maxlength="40"></label>
+    <label>How many test NLT<input id="s-amount" type="text" inputmode="decimal" autocomplete="off" maxlength="20"></label>
+    <button id="b-review" class="big">Review</button>
+    <div id="s-confirm" class="confirm" hidden>
+      <p id="s-summary"></p>
+      <button id="b-send" class="big">Yes, send it</button>
+      <button id="b-cancel" class="plain">Cancel</button>
+    </div>
+  </div>
+  <div class="row">
+    <button id="b-refresh" class="plain">Refresh</button>
+    <button id="b-backup-again" class="plain">Download backup file</button>
+    <button id="b-lock" class="plain">Lock</button>
+  </div>
+</section>
+
+<details><summary>What is a wallet?</summary>
+<p>Your wallet is a secret key kept only in this browser, plus an address made from it. The address is safe to share. The secret key lets you send coins, so it never leaves your device. Not even our server sees it.</p></details>
+<details><summary>Why write down a backup?</summary>
+<p>There is no "forgot password" here. If this browser's data is cleared or the device is lost, your backup code (or backup file plus its password) is the only way back in.</p></details>
+<details><summary>What are contribution points?</summary>
+<p>You earn points by helping the network, for example by sending transfers or running a node. Points show how much you've taken part.</p></details>
+<details><summary>What is the fee?</summary>
+<p>Each transfer includes a tiny fee that goes to whoever adds it to the network. On the test network it's paid in test coins, which have no value.</p></details>
+</main>
+<script src="/nacl-fast.min.js"></script>
+<script src="/wallet-core.js"></script>
+<script src="/wallet.js"></script>
+</body>
+</html>

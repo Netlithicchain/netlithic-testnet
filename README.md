@@ -12,9 +12,23 @@ Open the Netlithic web wallet in your browser, click **Create my wallet**, write
 code, and click **Get free test coins**. That's it. Your secret key stays in your browser. See
 [docs/WEB_WALLET.md](docs/WEB_WALLET.md).
 
-## Run your own node (a bit more technical)
-If you're comfortable with a terminal, one command sets up a wallet and a node and connects it to
-the network. See [docs/JOIN_TESTNET.md](docs/JOIN_TESTNET.md).
+## Run your own test node (Windows, no admin needed)
+Install Python 3.10+ and Git, open a normal PowerShell, and paste these one at a time:
+
+```powershell
+git clone https://github.com/Netlithicchain/netlithic-testnet.git
+```
+```powershell
+cd netlithic-testnet
+```
+```powershell
+python easy_node.py install
+```
+
+Then check http://127.0.0.1:8000/status. The node does not update itself; to update, run `git pull`
+and then `python easy_node.py install` again. To remove it, run `python easy_node.py uninstall`
+(your data is kept). Full steps, plus the advanced manual setup with a wallet and mining, are in
+[docs/JOIN_TESTNET.md](docs/JOIN_TESTNET.md).
 
 ## Words you'll see
 - **Wallet**: your secret key plus an address. The address is like an account number; share it to receive coins.
@@ -29,6 +43,7 @@ the network. See [docs/JOIN_TESTNET.md](docs/JOIN_TESTNET.md).
 | `netlithic.py` | the main command-line tool (wallets, node, sending, mining) |
 | `node.py`, `p2p_http.py`, `core.py`, `economics.py`, `contributions.py` | the node and chain rules |
 | `wallet.py` | key creation and transfer signing |
+| `easy_node.py` | easy installer: runs a test node in the background (Windows, Mac, Linux) |
 | `join_testnet.py` | one-command setup to join the test network |
 | `webwallet.py`, `webwallet/` | the browser wallet |
 | `faucet.py` | hands out free test coins, with daily limits |

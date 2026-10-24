@@ -39,6 +39,30 @@ def is_empty_self_mined(block: dict) -> bool:
     return all(p["sender"] == miner and p["recipient"] == miner for p in transfers)
 
 
+# ---- Anti-farming v2 (active from `rules_height`, set by core to SECURITY_FORK_HEIGHT) ----
+MIN_ADDRESS_AGE_BLOCKS = 1440     # ~1 day at 60 s (Aric 2026-10-23); a sender must have first received coins this many blocks earlier
+SENDER_TX_CAP_PER_EPOCH = 30      # point-earning transfers per sender per epoch
+# Reciprocal rule: if A->B already earned this epoch, B->A earns nothing (ping-pong farming).
+
+
+def first_seen_heights(blocks: Iterable[dict]) -> Dict[str, int]:
+    """Height at which each address first received anything (reward, transfer,
+    payout or genesis allocation)."""
+    seen: Dict[str, int] = {}
+    for pos, block in enumerate(blocks):
+        idx = int(block.get("index", pos))
+        for tx in block.get("transactions") or []:
+            if not isinstance(tx, dict):
+                continue
+            if "payload" in tx:
+                r = tx["payload"].get("recipient")
+            else:
+                r = tx.get("recipient")
+            if isinstance(r, str) and r not in seen:
+                seen[r] = idx
+    return seen
+
+
 def points_from_blocks(
     blocks: Iterable[dict],
     per_block: int = DEFAULT_POINTS_PER_BLOCK_TENTHS,
@@ -46,12 +70,16 @@ def points_from_blocks(
     min_transfer: int = MIN_POINT_TRANSFER,
     pair_cap: int = PAIR_CAP_PER_EPOCH,
     epoch_blocks: int = DEFAULT_EPOCH_BLOCKS,
+    epoch_fn=None,
+    rules_height: int = None,
+    first_seen: Dict[str, int] = None,
 ) -> Dict[str, Dict]:
     """blocks: block dicts in chain order.
     Returns {address: {cp_tenths, cp, blocks_mined, empty_blocks, tx_count, point_tx_count}}.
     tx_count counts every transfer sent; point_tx_count only those that earned points."""
     users: Dict[str, Dict] = {}
     pair_counts: Dict[tuple, int] = {}
+    sender_counts: Dict[tuple, int] = {}
 
     def user(addr: str) -> Dict:
         return users.setdefault(
@@ -59,7 +87,8 @@ def points_from_blocks(
                    "point_tx_count": 0})
 
     for pos, block in enumerate(blocks):
-        epoch = int(block.get("index", pos)) // max(1, int(epoch_blocks))
+        idx = int(block.get("index", pos))
+        epoch = epoch_fn(idx) if epoch_fn else idx // max(1, int(epoch_blocks))
         txs = block.get("transactions") or []
         if txs and txs[0].get("type") == "reward":
             u = user(txs[0]["recipient"])
@@ -78,6 +107,15 @@ def points_from_blocks(
                 key = (epoch, p["sender"], p["recipient"])
                 if pair_counts.get(key, 0) >= pair_cap:
                     continue
+                if rules_height is not None and idx >= rules_height:
+                    if pair_counts.get((epoch, p["recipient"], p["sender"]), 0) > 0:
+                        continue  # reciprocal ping-pong
+                    if sender_counts.get((epoch, p["sender"]), 0) >= SENDER_TX_CAP_PER_EPOCH:
+                        continue
+                    if first_seen is not None and \
+                            idx - first_seen.get(p["sender"], idx) < MIN_ADDRESS_AGE_BLOCKS:
+                        continue  # brand-new address
+                    sender_counts[(epoch, p["sender"])] = sender_counts.get((epoch, p["sender"]), 0) + 1
                 pair_counts[key] = pair_counts.get(key, 0) + 1
                 u["cp_tenths"] += per_tx
                 u["point_tx_count"] += 1
@@ -102,4 +140,4 @@ def load_state() -> Dict:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
-        return {"users": {}}
+        return {"users": {}}

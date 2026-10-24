@@ -1,0 +1,34 @@
+[Unit]
+Description=Netlithic node (P2P HTTP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=netlithic
+Group=netlithic
+WorkingDirectory=/var/lib/netlithic
+EnvironmentFile=/etc/netlithic/node.env
+ExecStart=/opt/netlithic/venv/bin/python /opt/netlithic/netlithic.py node start 8000 --data-dir /var/lib/netlithic
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/netlithic
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+LimitNOFILE=4096
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

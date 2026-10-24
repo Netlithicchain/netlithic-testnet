@@ -108,6 +108,7 @@ def test_static_assets_have_no_unsafe_dom_or_external_urls():
 
 class Fake:
     seen = []
+    mempool = []
 
 
 def fake_upstream():
@@ -121,6 +122,8 @@ def fake_upstream():
                 return self.reply(200, {"chain_id": W.current_chain_id(), "height": 9})
             if self.path.startswith("/account"):
                 return self.reply(200, {"balance": 4999990000, "next_nonce": 2})
+            if self.path == "/mempool":
+                return self.reply(200, {"count": len(Fake.mempool), "mempool": Fake.mempool})
             if self.path == "/contributions":
                 return self.reply(200, {"contributors": [{"address": "ab" * 16, "cp": "<b>6</b>"}]})
             self.reply(404, {})
@@ -145,7 +148,7 @@ def ww():
     url = f"http://127.0.0.1:{up.server_address[1]}"
     s = ThreadingHTTPServer(("127.0.0.1", 0), webwallet.make_handler(webwallet.Upstream(url, url)))
     threading.Thread(target=s.serve_forever, daemon=True).start()
-    Fake.seen.clear()
+    Fake.seen.clear(); Fake.mempool = []
     yield f"http://127.0.0.1:{s.server_address[1]}"
     s.shutdown(); up.shutdown()
 
@@ -177,7 +180,11 @@ def test_info_and_account(ww):
     assert code == 200 and info["chain_id"] == W.current_chain_id() and info["min_fee"] == W.current_min_fee()
     code, _, b = req(ww + "/api/account?address=" + "AB" * 16)
     acct = json.loads(b)
-    assert acct == {"address": "ab" * 16, "balance": 4999990000, "next_nonce": 2, "points": "<b>6</b>"}
+    pay = acct.pop("payouts")
+    assert acct == {"address": "ab" * 16, "balance": 4999990000, "next_nonce": 2, "points": "<b>6</b>",
+                    "pending_in": [], "pending_out": [], "pending_known": True}
+    assert set(pay) == {"earned_nlt", "vesting_nlt", "claimable_nlt", "points_this_epoch",
+                        "blocks_until_next_payout"}
     assert req(ww + "/api/account?address=<script>")[0] == 400
 
 
@@ -207,3 +214,169 @@ def test_drip_validates_and_passes_errors(ww):
     assert req(ww + "/api/drip", {"address": "nope"})[0] == 400
     assert req(ww + "/api/mine", {})[0] == 404
     assert req(ww + "/api/add_peer", {})[0] == 404
+
+
+def test_explorer_link_off_by_default(ww):
+    assert json.loads(req(ww + "/api/info")[2])["explorer"] == ""
+
+
+def test_explorer_link_configured():
+    up = fake_upstream()
+    url = f"http://127.0.0.1:{up.server_address[1]}"
+    s = ThreadingHTTPServer(("127.0.0.1", 0), webwallet.make_handler(webwallet.Upstream(url, url), False, "/explorer/"))
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    try:
+        assert json.loads(req(f"http://127.0.0.1:{s.server_address[1]}/api/info")[2])["explorer"] == "/explorer"
+    finally:
+        s.shutdown(); up.shutdown()
+
+
+@pytest.mark.parametrize("bad", ["https://evil.com", "//evil.com", "explorer", "/a b", "javascript:x"])
+def test_explorer_link_must_be_same_site(bad):
+    with pytest.raises(ValueError):
+        webwallet.normalize_explorer(bad)
+
+
+def test_explorer_links_in_ui():
+    js = open(os.path.join(STATIC, "wallet.js")).read()
+    html = open(os.path.join(STATIC, "index.html")).read()
+    assert 'id="h-history"' in html and 'id="s-track"' in html
+    assert '"/address/"' in js and '"/tx/"' in js
+
+
+# ---- "On the way" (pending transfers from the mempool) -------------------
+
+def _transfer(sender_seed, recipient, amount, nonce=1, sender=None):
+    pub = W.pubkey_from_private(sender_seed)
+    payload = {"sender": sender or "0f" * 16, "recipient": recipient, "amount": amount, "nonce": nonce,
+               "timestamp": 1761000000.0, "fee": 10000, "chain_id": W.current_chain_id()}
+    _, sig = py_sign(sender_seed, payload)
+    return {"payload": payload, "pubkey": pub, "sig": sig}
+
+
+def test_account_lists_pending_in_and_out_without_touching_balance(ww):
+    me = "ab" * 16
+    out_tx = _transfer(SEEDS[0], "cd" * 16, 500000000, sender=me)
+    me_seed_tx = _transfer(SEEDS[1], me, 700000000, sender="ee" * 16)
+    Fake.mempool = [out_tx, me_seed_tx, {"type": "reward", "recipient": me, "amount": 5}, "junk",
+                    _transfer(SEEDS[2], "12" * 16, 3)]
+    acct = json.loads(req(ww + "/api/account?address=" + me)[2])
+    assert acct["balance"] == 4999990000  # confirmed balance only
+    assert acct["pending_known"] is True
+    assert [(p["to"], p["amount"], p["fee"]) for p in acct["pending_out"]] == [("cd" * 16, 500000000, 10000)]
+    assert [(p["from"], p["amount"]) for p in acct["pending_in"]] == [("ee" * 16, 700000000)]
+    assert all(re.fullmatch(r"[0-9a-f]{64}", p["tx_id"]) for p in acct["pending_in"] + acct["pending_out"])
+
+
+def test_pending_for_caps_and_ignores_bad_entries():
+    me = "ab" * 16
+    txs = [_transfer(SEEDS[0], me, i + 1, nonce=i + 1, sender="cd" * 16) for i in range(30)]
+    txs += [{"payload": {"sender": "x", "recipient": me, "amount": 1}}, {"payload": {"sender": "cd" * 16, "recipient": me, "amount": -4}}, None]
+    pin, pout = webwallet.pending_for(me, txs)
+    assert len(pin) == webwallet.MAX_PENDING and pout == []
+    assert webwallet.pending_for(me, "nope") == ([], [])
+
+
+def test_account_still_works_when_mempool_unavailable(ww, monkeypatch):
+    orig = webwallet.Upstream.node_call
+    def boom(self, path, payload=None):
+        if path == "/mempool":
+            raise OSError("down")
+        return orig(self, path, payload)
+    monkeypatch.setattr(webwallet.Upstream, "node_call", boom)
+    acct = json.loads(req(ww + "/api/account?address=" + "ab" * 16)[2])
+    assert acct["balance"] == 4999990000 and acct["pending_known"] is False and acct["pending_in"] == []
+
+
+@needs_node
+def test_js_tracks_on_the_way_then_arrived():
+    js = r"""
+    const C = require('./wallet-core.js'); const A = 'cd'.repeat(16), B = 'ef'.repeat(16), id1 = '1'.repeat(64), id2 = '2'.repeat(64);
+    let t = C.trackTransfers({}, {pending_known: true, pending_in: [{tx_id: id1, from: A, amount: 500000000}],
+                                  pending_out: [{tx_id: id2, to: B, amount: 200000000, fee: 10000}]}, 1000);
+    const r = {};
+    r.texts = Object.keys(t).sort().map(k => C.describeTransfer(t[k]));
+    r.tot = C.pendingTotals(t);
+    t = C.trackTransfers(t, {pending_known: false}, 2000);   // node didn't answer: don't flip
+    r.still = Object.keys(t).map(k => t[k].state);
+    t = C.trackTransfers(t, {pending_known: true, pending_in: [], pending_out: []}, 3000);
+    r.after = Object.keys(t).sort().map(k => [t[k].state, C.describeTransfer(t[k])]);
+    r.tot2 = C.pendingTotals(t);
+    t[ '3'.repeat(64) ] = {dir: 'out', other: B, amount: 1, state: 'pending', since: 3000, local: true};
+    t = C.trackTransfers(t, {pending_known: true}, 4000);
+    r.local = t['3'.repeat(64)].state;
+    t = C.trackTransfers(t, {pending_known: true}, 3000 + 11 * 60 * 1000);
+    r.left = Object.keys(t).map(k => t[k].state);
+    console.log(JSON.stringify(r));
+    """
+    r = run_js(js)
+    assert r["texts"] == ["Receiving 5 test NLT from cdcd…cdcd", "Sending 2 test NLT to efef…efef"]
+    assert r["tot"] == {"in": 500000000, "out": 200010000}
+    assert r["still"] == ["pending", "pending"]
+    assert r["after"] == [["arrived", "Received 5 test NLT from cdcd…cdcd"], ["arrived", "Sent 2 test NLT to efef…efef"]]
+    assert r["tot2"] == {"in": 0, "out": 0}
+    assert r["local"] == "pending"   # just sent, not listed yet: keep waiting
+    assert r["left"] == ["arrived"]  # old ones cleared; the just-sent one now counts as arrived
+
+
+def test_on_the_way_ui_present_and_safe():
+    html = open(os.path.join(STATIC, "index.html"), encoding="utf-8").read()
+    js = open(os.path.join(STATIC, "wallet.js"), encoding="utf-8").read()
+    assert 'id="h-moving"' in html and 'id="h-pending-total"' in html and "Test coins have no value" in html
+    assert "On the way" in js and "Arrived" in js and "innerHTML" not in js
+    assert "refresh(true);" in js.split('api("send"')[1]  # refresh right after a send
+
+
+# ---- "Stay unlocked for 15 minutes" --------------------------------------
+
+@needs_node
+def test_js_stay_unlocked_timing_rules():
+    js = r"""
+    const C = require('./wallet-core.js'); const now = 1_000_000_000_000;
+    const rec = {id: 'a'.repeat(32), iv: 'b'.repeat(24), ct: 'c'.repeat(80), address: 'ab'.repeat(16), expires: C.stayUntil(now)};
+    const r = {};
+    r.ms = C.STAY_MS; r.until = C.stayUntil(now) - now;
+    r.fresh = C.staySessionValid(rec, now);
+    r.at14 = C.staySessionValid(rec, now + 14 * 60000);
+    r.at15 = C.staySessionValid(rec, now + 15 * 60000);
+    r.tooLong = C.staySessionValid(Object.assign({}, rec, {expires: now + 16 * 60000}), now);
+    r.bad = [null, {}, Object.assign({}, rec, {id: 'x'}), Object.assign({}, rec, {expires: 'soon'}),
+             Object.assign({}, rec, {ct: ''})].map(x => C.staySessionValid(x, now));
+    r.line = C.stayLine(now);
+    console.log(JSON.stringify(r));
+    """
+    r = run_js(js)
+    assert r["ms"] == r["until"] == 15 * 60 * 1000
+    assert r["fresh"] and r["at14"] and not r["at15"]
+    assert not r["tooLong"]           # an edited expiry can't stretch past 15 minutes
+    assert r["bad"] == [False] * 5
+    assert r["line"].startswith("Stays unlocked in this tab until ") and r["line"].endswith(".")
+
+
+def test_stay_unlocked_ui_is_opt_in_and_never_stores_plain_seed():
+    html = open(os.path.join(STATIC, "index.html"), encoding="utf-8").read()
+    js = open(os.path.join(STATIC, "wallet.js"), encoding="utf-8").read()
+    box = re.search(r'<input id="u-stay"[^>]*>', html).group(0)
+    assert 'type="checkbox"' in box and "checked" not in box       # off by default
+    assert "Stay unlocked for 15 minutes" in html and 'id="b-lock-now"' in html and ">Lock now<" in html
+    # Only the AES-GCM ciphertext goes to sessionStorage; never localStorage; key non-extractable.
+    assert "localStorage.setItem(SESSION" not in js and js.count("sessionStorage.setItem(") == 2
+    assert 'generateKey({ name: "AES-GCM", length: 256 }, false,' in js
+    assert "exportKey" not in js
+    stay = js.split("async function startStay")[1].split("async function resumeStay")[0]
+    assert "seed" not in stay.split("var rec =")[1].split(";")[0]   # the stored record has no seed field
+    # Lock, Lock now and Remove wallet all wipe it right away; refresh re-checks expiry.
+    assert 'addEventListener("click", lockNow)' in js and "function lockNow() { clearStay(); say(\"\");" in js
+    assert "clearStay(); localStorage.removeItem(STORE)" in js
+    assert "sessionStorage.removeItem(SESSION)" in js and "st.clear()" in js
+    assert "C.staySessionValid(rec, Date.now())" in js
+
+
+def test_desktop_page_hides_stay_unlocked_but_keeps_rest():
+    import sys
+    sys.path.insert(0, os.path.join(ROOT, "desktop"))
+    import netlithic_desktop as D
+    html = open(os.path.join(STATIC, "index.html"), encoding="utf-8").read()
+    out = D.build_index(html)
+    assert 'id="u-stay"' not in out and 'id="b-unlock"' in out and 'id="u-pass"' in out
+    assert 'id="e-toggle"' in out and "/desktop.js" in out

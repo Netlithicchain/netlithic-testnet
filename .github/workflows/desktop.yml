@@ -1,0 +1,65 @@
+# Builds the desktop app on Windows, macOS and Linux. Test coins have no value.
+# Builds are UNSIGNED unless signing secrets are added; unsigned builds are for testing only.
+name: desktop
+on:
+  workflow_dispatch:
+  push:
+    tags: ["desktop-v*"]
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: {python-version: "3.12"}
+      - run: pip install -r requirements.txt -r requirements-dev.txt && pytest -q
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: {python-version: "3.12"}
+      - name: Windows
+        if: runner.os == 'Windows'
+        run: |
+          choco install innosetup -y --no-progress
+          powershell -ExecutionPolicy Bypass -File desktop\build_windows.ps1
+        env:
+          NETLITHIC_SIGN_CMD: ${{ secrets.NETLITHIC_SIGN_CMD }}
+      - name: macOS
+        if: runner.os == 'macOS'
+        run: sh desktop/build_macos.sh
+        # Add these secrets (and import the certificate into a keychain) to sign + notarize:
+        env:
+          NETLITHIC_MAC_IDENTITY: ${{ secrets.NETLITHIC_MAC_IDENTITY }}
+          NETLITHIC_NOTARY_PROFILE: ${{ secrets.NETLITHIC_NOTARY_PROFILE }}
+      - name: Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y libfuse2
+          curl -fsSL -o /usr/local/bin/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /usr/local/bin/appimagetool
+          sh desktop/build_linux.sh
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ./dist/Netlithic/Netlithic --no-window --data-dir "$RUNNER_TEMP/nl" --ui-port 47190 --node-port 47191 --seed http://127.0.0.1:9 &
+          for i in $(seq 30); do curl -sf http://127.0.0.1:47190/ >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:47190/ | grep -qi netlithic
+          kill %1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netlithic-${{ runner.os }}
+          path: |
+            desktop/Output/*.exe*
+            dist/*.dmg*
+            dist/*.tar.gz*
+            dist/*.AppImage*

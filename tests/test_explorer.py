@@ -134,3 +134,74 @@ def test_against_real_node(node):
     title, body = Explorer(reader).home()
     assert "Latest blocks" in body and "netlithic-dev" in body
     assert Explorer(reader).block("0")[0] == "Block 0"
+
+
+# ---- URL prefix (served at /explorer/ behind Caddy) ---------------------
+
+@pytest.fixture
+def prefixed(tmp_path, monkeypatch):
+    _, tx = signed(tmp_path, monkeypatch)
+    from http.server import ThreadingHTTPServer
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Explorer(FakeReader(tx)), "/explorer/"))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_address[1]}", tx
+    srv.shutdown()
+
+
+def _root_links(body):
+    import re
+    return re.findall(r"""(?:href|src|action)=["'](/[^"']*)""", body)
+
+
+@pytest.mark.parametrize("pre", ["", "/explorer"])  # stripped (handle_path) or kept (handle)
+def test_prefix_links_all_carry_base(prefixed, pre):
+    url, tx = prefixed
+    from core import tx_id
+    for path in ["/", "/economy", "/block/1", "/tx/" + tx_id(tx), "/address/" + ADDR, "/block/99"]:
+        code, body, _ = get(url + pre + path)
+        links = _root_links(body)
+        assert links, path
+        assert all(l.startswith("/explorer/") for l in links), (path, links)
+    code, _, _ = get(url + pre + "/static/netlithic-icon.png")
+    assert code == 200
+
+
+def test_prefix_search_redirect_and_bare_root(prefixed):
+    url, tx = prefixed
+    assert get(url + "/search?q=1")[2].endswith("/explorer/block/1")
+    assert get(url + "/explorer/search?q=" + ADDR)[2].endswith("/explorer/address/" + ADDR)
+    import http.client
+    c = http.client.HTTPConnection(url.split("//")[1]); c.request("GET", "/explorer")
+    r = c.getresponse()
+    assert r.status == 301 and r.getheader("Location") == "/explorer/"
+
+
+def test_default_has_no_prefix(server):
+    url, _ = server
+    _, body, _ = get(url + "/")
+    assert "/explorer" not in body and "href=\"/\"" in body
+
+
+@pytest.mark.parametrize("bad", ["/a b", "/x\"y", "//evil.com", "/a/../b?", "http://x"])
+def test_base_path_rejects_bad(bad):
+    with pytest.raises(ValueError):
+        ex_mod.normalize_base_path(bad)
+
+
+def test_base_path_normalizes():
+    assert ex_mod.normalize_base_path("") == ""
+    assert ex_mod.normalize_base_path("explorer/") == "/explorer"
+    assert ex_mod.with_base("<a href='/x'>", "/e") == "<a href='/e/x'>"
+    assert ex_mod.with_base('<a href="//x">', "/e") == '<a href="//x">'
+
+
+def test_address_page_shows_on_the_way(tmp_path, monkeypatch):
+    _, tx = signed(tmp_path, monkeypatch)
+    r = FakeReader(tx)
+    pend = {"payload": {"sender": "d" * 32, "recipient": ADDR, "amount": 7 * 10**8, "fee": 10000, "nonce": 1}}
+    r.mempool = lambda: [pend, {"payload": {"sender": "1" * 32, "recipient": "2" * 32, "amount": 1}}]
+    _, body = Explorer(r).address(ADDR)
+    assert "On the way" in body and "Receiving 7 test NLT from" in body
+    assert body.count("on the way") == 1 and "Test coins have no value" in body
+    _, body2 = Explorer(FakeReader(tx)).address(ADDR)
+    assert "On the way" not in body2

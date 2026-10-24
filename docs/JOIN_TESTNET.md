@@ -6,9 +6,7 @@
 The seed node is `http://137.184.199.238:8000`. You can point to a different one
 with `--seed URL` or the `NETLITHIC_SEED_URL` environment variable.
 
-> Repo address `https://github.com/Netlithicchain/netlithic-testnet` is **proposed** and not live yet.
-
-
+## What you need
 - Python 3.10 or newer, plus `git` (or the code as a zip)
 - About 100 MB of disk space
 
@@ -16,14 +14,14 @@ with `--seed URL` or the `NETLITHIC_SEED_URL` environment variable.
 
 **Windows (PowerShell)**
 ```powershell
-git clone https://github.com/Netlithicchain/netlithic-testnet netlithic
+git clone <netlithic repo url> netlithic
 cd netlithic
 py join_testnet.py
 ```
 
 **Linux / macOS**
 ```bash
-git clone https://github.com/Netlithicchain/netlithic-testnet netlithic
+git clone <netlithic repo url> netlithic
 cd netlithic
 python3 join_testnet.py
 ```

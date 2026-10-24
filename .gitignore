@@ -12,10 +12,10 @@ website1.docx
 testnet-node/
 .venv-testnet/
 faucet-data/
-chain.json
-mempool.json
-peers.json
-state_contributions.json
-contributions_cache.json
-admin_token.txt
-*.docx
+dist/
+build/
+.venv-desktop-build/
+desktop/Output/
+desktop/netlithic.png
+desktop/netlithic.icns
+*.spec

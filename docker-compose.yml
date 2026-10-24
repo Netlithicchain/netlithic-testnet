@@ -1,0 +1,13 @@
+# docker compose up -d     (Netlithic TEST node; test coins have no value)
+services:
+  node:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"   # change to "8000:8000" to let other nodes reach you
+    environment:
+      ADVERTISE_URL: ""         # e.g. http://YOUR.PUBLIC.IP:8000
+    volumes:
+      - netlithic-data:/data
+volumes:
+  netlithic-data:

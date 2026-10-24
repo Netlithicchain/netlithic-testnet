@@ -6,9 +6,14 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from collections import OrderedDict
 
-from core import Blockchain, normalize_address, tx_id, normalize_tx, is_reward_tx
+from netutil import urlopen, is_public_ip
+
+import netlithic_version
+from core import SECURITY_FORK_HEIGHT, Blockchain, normalize_address, tx_id, normalize_tx, is_reward_tx, is_post_fork
+import economics
 from economics import format_points, to_nlt
 
 
@@ -24,10 +29,24 @@ SEEN_TTL_SECONDS = 120
 
 # Hardening limits
 MAX_PEERS = 32
+MAX_PEERS_PER_HOST = 2                  # one machine can't fill the peer list
+MAX_MEMPOOL = int(os.environ.get("NETLITHIC_MAX_MEMPOOL", "5000"))
+# Per-IP POST rate limit (token bucket). Loopback is exempt (local wallet/desktop app).
+RATE_PER_SECOND = float(os.environ.get("NETLITHIC_RATE_PER_SECOND", "5"))
+RATE_BURST = float(os.environ.get("NETLITHIC_RATE_BURST", "40"))
+RATE_LIMIT_LOOPBACK = os.environ.get("NETLITHIC_RATE_LIMIT_LOOPBACK", "") == "1"
+MAX_TRACKED_IPS = 10000
 MAX_POST_BYTES = 1 * 1024 * 1024        # any POST body (tx, block, peer)
 MAX_FETCH_BYTES = 16 * 1024 * 1024      # a /chain or /peers response from a peer
 ADMIN_TOKEN_ENV = "NETLITHIC_ADMIN_TOKEN"
 ADMIN_TOKEN_HEADER = "X-Admin-Token"
+
+# Review F1: a /receive_block "from_peer" may trigger a sync only if it is a
+# peer we already know, resolves only to public addresses, and hasn't
+# triggered one recently. NETLITHIC_ALLOW_PRIVATE_PEERS=1 lifts the address
+# check for local multi-node test setups (127.0.0.1 / LAN).
+SYNC_TRIGGER_MIN_SECONDS = float(os.environ.get("NETLITHIC_SYNC_TRIGGER_SECONDS", "10"))
+ALLOW_PRIVATE_PEERS = os.environ.get("NETLITHIC_ALLOW_PRIVATE_PEERS", "") == "1"
 
 
 blockchain = Blockchain()
@@ -138,7 +157,7 @@ def _normalize_peer(peer: str) -> str:
     return f"{parsed.scheme}://{host}" + (f":{port}" if port else "")
 
 
-LOCAL_HOSTNAMES = {"127.0.0.1", "localhost", "0.0.0.0", "[::1]"}
+LOCAL_HOSTNAMES = {"127.0.0.1", "localhost", "0.0.0.0", "[::1]"}  # nosec B104 - matches peer URLs to reject, never binds
 
 
 def _is_loopback_peer(peer_url: str) -> bool:
@@ -172,6 +191,31 @@ def _is_self(peer_url: str) -> bool:
     return host in LOCAL_HOSTNAMES or host == str(HOST).lower()
 
 
+_rate_buckets = {}
+_rate_lock = threading.Lock()
+
+
+def rate_limited(client_ip: str, now: float = None) -> bool:
+    """True if this IP is over its POST budget. Token bucket per IP."""
+    if _is_loopback(client_ip) and not RATE_LIMIT_LOOPBACK:
+        return False
+    now = time.time() if now is None else now
+    with _rate_lock:
+        if len(_rate_buckets) > MAX_TRACKED_IPS:
+            _rate_buckets.clear()
+        tokens, last = _rate_buckets.get(client_ip, (RATE_BURST, now))
+        tokens = min(RATE_BURST, tokens + (now - last) * RATE_PER_SECOND)
+        if tokens < 1:
+            _rate_buckets[client_ip] = (tokens, now)
+            return True
+        _rate_buckets[client_ip] = (tokens - 1, now)
+        return False
+
+
+def _peer_host(peer_url: str) -> str:
+    return (urlparse(peer_url).hostname or "").lower()
+
+
 def _try_add_peer(peer: str) -> str:
     """Validate and add a peer (caller holds state_lock).
     Returns 'added', 'known', or raises ValueError with the reason."""
@@ -180,10 +224,77 @@ def _try_add_peer(peer: str) -> str:
         raise ValueError("Cannot add self as peer")
     if normalized in peers:
         return "known"
+    # Review R1: every way into the peer table (/hello, /add_peer, --peer,
+    # peers.json, discovery) must resolve only to public addresses.
+    if not peer_address_allowed(normalized):
+        raise ValueError("Peer address not allowed (private, loopback, link-local or unresolvable); "
+                         "set NETLITHIC_ALLOW_PRIVATE_PEERS=1 for a local test network")
     if len(peers) >= MAX_PEERS:
         raise ValueError(f"Peer limit reached ({MAX_PEERS})")
+    host = _peer_host(normalized)
+    if not _is_loopback_peer(normalized) and \
+            sum(1 for p in peers if _peer_host(p) == host) >= MAX_PEERS_PER_HOST:
+        raise ValueError(f"Too many peers from one host (max {MAX_PEERS_PER_HOST})")
     peers.add(normalized)
     return "added"
+
+
+_sync_trigger_last = OrderedDict()   # LRU: oldest entries evicted, never a full reset
+_sync_trigger_lock = threading.Lock()
+
+
+def _resolve_host_ips(host: str) -> list:
+    import socket
+    infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    return [ipaddress.ip_address(i[4][0].split("%")[0]) for i in infos]
+
+
+def _is_public_ip(ip) -> bool:
+    return is_public_ip(ip)
+
+
+def fetch_ip_allowed(ip) -> bool:
+    """Connect-time policy for every outbound peer fetch (review R2): the
+    address the socket actually connected to must be public."""
+    return ALLOW_PRIVATE_PEERS or is_public_ip(ip)
+
+
+def peer_address_allowed(peer_url: str, resolver=None) -> bool:
+    """True if every address the peer's host resolves to is public (no
+    private, loopback, link-local, multicast, reserved). Unresolvable = no."""
+    if ALLOW_PRIVATE_PEERS:
+        return True
+    host = (urlparse(peer_url).hostname or "").strip("[]")
+    if not host:
+        return False
+    try:
+        ips = (resolver or _resolve_host_ips)(host)
+    except Exception:
+        return False
+    return bool(ips) and all(_is_public_ip(ip) for ip in ips)
+
+
+def sync_trigger_allowed(peer_url, now: float = None, resolver=None) -> tuple:
+    """Gate for a sync triggered by an incoming /receive_block (review F1).
+    Returns (allowed, reason)."""
+    if not peer_url:
+        return False, "no from_peer"
+    with state_lock:
+        known = peer_url in peers
+    if not known:
+        return False, "from_peer is not a known peer"
+    if not peer_address_allowed(peer_url, resolver=resolver):
+        return False, "from_peer resolves to a private/loopback/link-local address"
+    now = time.time() if now is None else now
+    with _sync_trigger_lock:
+        last = _sync_trigger_last.get(peer_url)
+        if last is not None and now - last < SYNC_TRIGGER_MIN_SECONDS:
+            return False, "sync trigger rate-limited"
+        _sync_trigger_last[peer_url] = now
+        _sync_trigger_last.move_to_end(peer_url)
+        while len(_sync_trigger_last) > MAX_PEERS * 4:
+            _sync_trigger_last.popitem(last=False)
+    return True, "ok"
 
 
 def _save_peers():
@@ -306,7 +417,7 @@ def _post_json(url: str, payload: dict, timeout: int = 5):
         headers={"Content-Type": "application/json", "Accept": "application/json"},
         method="POST",
     )
-    with urlopen(req, timeout=timeout) as resp:
+    with urlopen(req, timeout=timeout, allow_ip=fetch_ip_allowed) as resp:
         body = resp.read(MAX_FETCH_BYTES + 1)
         if len(body) > MAX_FETCH_BYTES:
             raise ValueError(f"Peer response over {MAX_FETCH_BYTES} bytes")
@@ -316,7 +427,7 @@ def _post_json(url: str, payload: dict, timeout: int = 5):
 
 def _get_json(url: str, timeout: int = 5):
     req = Request(url, headers={"Accept": "application/json"})
-    with urlopen(req, timeout=timeout) as resp:
+    with urlopen(req, timeout=timeout, allow_ip=fetch_ip_allowed) as resp:
         body = resp.read(MAX_FETCH_BYTES + 1)
         if len(body) > MAX_FETCH_BYTES:
             raise ValueError(f"Peer response over {MAX_FETCH_BYTES} bytes")
@@ -527,6 +638,12 @@ class P2PHandler(BaseHTTPRequestHandler):
                     },
                 )
 
+        if path == "/pause_status":
+            import pause
+            with state_lock:
+                st = pause.state(blockchain.chain)
+            return _json_response(self, 200, st)
+
         if path == "/status":
             with state_lock:
                 latest = blockchain.get_latest_block()
@@ -535,10 +652,17 @@ class P2PHandler(BaseHTTPRequestHandler):
                     200,
                     {
                         "node": self_url(),
+                        "version": netlithic_version.VERSION,
+                        "min_peer_version": netlithic_version.MIN_PEER_VERSION,
+                        "upgrade_deadline_height": netlithic_version.UPGRADE_DEADLINE_HEIGHT,
+                        "security_fork_height": SECURITY_FORK_HEIGHT,
+                        "fork_ready": True,
                         "chain_id": chain_id(),
                         "height": latest.index,
                         "latest_hash": latest.hash,
+                        "latest_timestamp": float(latest.timestamp),
                         "difficulty": latest.difficulty,
+                        "difficulty_kind": "work" if is_post_fork(latest.index) else "leading_zeros",
                         "peers": shared_peers(self.client_address[0]),
                         "mempool_size": len(mempool),
                         "contributors": len(blockchain.contribution_points()),
@@ -570,6 +694,43 @@ class P2PHandler(BaseHTTPRequestHandler):
                     },
                 )
 
+        if path == "/payouts":
+            address = params.get("address", [None])[0]
+            try:
+                with state_lock:
+                    if isinstance(address, str):
+                        return _json_response(self, 200, blockchain.payout_account(address))
+                    return _json_response(self, 200, blockchain.payout_info())
+            except Exception:
+                return _json_response(self, 400, {"error": "Invalid address"})
+
+        if path == "/leaderboard":
+            with state_lock:
+                e = blockchain.econ
+                users = blockchain.contribution_points_this_epoch()
+                ranked = sorted(((a, u) for a, u in users.items()
+                                 if a not in e.locked_addresses and u["cp_tenths"] > 0),
+                                key=lambda kv: (-kv[1]["cp_tenths"], kv[0]))[:100]
+                h = len(blockchain.chain)
+                return _json_response(self, 200, {
+                    "height": h - 1,
+                    "epoch": e.epoch_id(h),
+                    "next_payout_height": e.next_epoch_height(h - 1),
+                    "rules": {
+                        "per_block_with_transfers": format_points(e.points_per_block),
+                        "per_transfer_sent": format_points(e.points_per_tx),
+                        "min_transfer_nlt": economics.to_nlt(e.min_point_transfer),
+                        "pair_cap_per_epoch": e.point_pair_cap,
+                        "empty_or_self_only_blocks": "0",
+                        "self_sends": "0",
+                    },
+                    "leaders": [{"rank": i + 1, "address": a, "points": u["cp"],
+                                 "blocks_with_transfers": u["blocks_mined"] - u["empty_blocks"],
+                                 "transfers_sent": u["tx_count"],
+                                 "transfers_that_earned": u["point_tx_count"]}
+                                for i, (a, u) in enumerate(ranked)],
+                })
+
         if path == "/balance":
             address = params.get("address", [None])[0]
             if not isinstance(address, str):
@@ -589,6 +750,22 @@ class P2PHandler(BaseHTTPRequestHandler):
                     )
             except Exception:
                 return _json_response(self, 400, {"error": "Invalid address"})
+
+        if path == "/history":
+            # Read-only activity list for one address (newest first, paged). No consensus effect.
+            from history import address_history
+            address = params.get("address", [None])[0]
+            try:
+                address = normalize_address(address)
+                offset = int(params.get("offset", ["0"])[0])
+                limit = int(params.get("limit", ["20"])[0])
+            except Exception:
+                return _json_response(self, 400, {"error": "Invalid address"})
+            with state_lock:
+                blocks = list(blockchain.chain)
+            res = address_history(blocks, address, offset, limit)
+            res["address"] = address
+            return _json_response(self, 200, res)
 
         if path == "/account":
             address = params.get("address", [None])[0]
@@ -611,6 +788,8 @@ class P2PHandler(BaseHTTPRequestHandler):
                             "confirmed_nonce": confirmed_nonce,
                             "pending_nonce": pending_nonce,
                             "next_nonce": next_nonce,
+                            "payouts": {k: v for k, v in blockchain.payout_account(address).items()
+                                        if k not in ("address", "payouts")},
                         },
                     )
             except Exception:
@@ -619,6 +798,9 @@ class P2PHandler(BaseHTTPRequestHandler):
         return _json_response(self, 404, {"error": "Not found"})
 
     def do_POST(self):
+        if rate_limited(self.client_address[0]):
+            self.close_connection = True
+            return _json_response(self, 429, {"error": "Too many requests, slow down"})
         try:
             data = _read_json(self)
         except BodyTooLarge as e:
@@ -671,6 +853,9 @@ class P2PHandler(BaseHTTPRequestHandler):
 
         try:
             normalized = _normalize_peer(peer)
+            if not peer_address_allowed(normalized):  # review R1: before any fetch
+                raise ValueError("Peer address not allowed (private, loopback, link-local or unresolvable); "
+                                 "set NETLITHIC_ALLOW_PRIVATE_PEERS=1 for a local test network")
             with state_lock:
                 newly_added = _try_add_peer(normalized) == "added"
                 if newly_added:
@@ -699,6 +884,8 @@ class P2PHandler(BaseHTTPRequestHandler):
             url = _normalize_peer(data.get("url"))
             if _is_self(url):
                 raise ValueError("Cannot add self as peer")
+            if not peer_address_allowed(url):  # review R1: before any fetch
+                raise ValueError("Peer address not allowed (private, loopback, link-local or unresolvable)")
         except ValueError as e:
             return _json_response(self, 400, {"error": str(e)})
 
@@ -716,6 +903,20 @@ class P2PHandler(BaseHTTPRequestHandler):
         if status.get("chain_id") != chain_id():
             return _json_response(self, 400, {"error": f"Peer is on a different chain_id (we are {chain_id()})"})
 
+        # Version gate (review F3): pre-0.5.0 builds fork off at block 5000.
+        peer_version = status.get("version")
+        upgrade_needed = netlithic_version.is_outdated(peer_version)
+        if upgrade_needed:
+            with state_lock:
+                height = blockchain.get_latest_block().index
+            if height >= netlithic_version.UPGRADE_DEADLINE_HEIGHT:
+                return _json_response(self, 400, {
+                    "error": (f"Upgrade needed: this network requires Netlithic {netlithic_version.MIN_PEER_VERSION} "
+                              f"or newer from block {netlithic_version.UPGRADE_DEADLINE_HEIGHT} (you run {peer_version or 'an older version'})"),
+                    "upgrade_needed": True,
+                    "min_version": netlithic_version.MIN_PEER_VERSION,
+                })
+
         try:
             with state_lock:
                 added = _try_add_peer(url) == "added"
@@ -724,7 +925,13 @@ class P2PHandler(BaseHTTPRequestHandler):
         except ValueError as e:
             return _json_response(self, 400, {"error": str(e)})
 
-        return _json_response(self, 200, {"message": "Peer added" if added else "Peer already known", "peer": url})
+        out = {"message": "Peer added" if added else "Peer already known", "peer": url}
+        if upgrade_needed:
+            out["upgrade_needed"] = True
+            out["warning"] = (f"Upgrade needed: Netlithic {netlithic_version.MIN_PEER_VERSION} or newer is required "
+                              f"before block {netlithic_version.UPGRADE_DEADLINE_HEIGHT}, or this node will split off at block "
+                              f"{netlithic_version.FORK_READY_HEIGHT}.")
+        return _json_response(self, 200, out)
 
     def handle_submit_tx(self, data):
         tx = data.get("tx")
@@ -747,6 +954,9 @@ class P2PHandler(BaseHTTPRequestHandler):
                         "tx_id": tid,
                     },
                 )
+
+            if len(mempool) >= MAX_MEMPOOL:
+                return _json_response(self, 503, {"error": "Mempool full, try again shortly"})
 
             if not blockchain.validate_candidate_tx_against_chain_and_mempool(tx, mempool):
                 return _json_response(self, 400, {"error": "Invalid transaction"})
@@ -798,6 +1008,9 @@ class P2PHandler(BaseHTTPRequestHandler):
                         "tx_id": tid,
                     },
                 )
+
+            if len(mempool) >= MAX_MEMPOOL:
+                return _json_response(self, 503, {"error": "Mempool full, try again shortly"})
 
             if not blockchain.validate_candidate_tx_against_chain_and_mempool(tx, mempool):
                 return _json_response(self, 400, {"error": "Invalid transaction"})
@@ -919,14 +1132,18 @@ class P2PHandler(BaseHTTPRequestHandler):
                 )
 
         if int(block_data.get("index", 0)) > blockchain.get_latest_block().index + 1:
-            if from_peer:
+            allowed, why = sync_trigger_allowed(from_peer)
+            if allowed:
                 _sync_with_peer(from_peer)
+                msg = "Behind current chain, sync attempted"
+            else:
+                msg = f"Behind current chain; no sync triggered ({why}); regular sync will catch up"
 
             return _json_response(
                 self,
                 200,
                 {
-                    "message": "Behind current chain, sync attempted",
+                    "message": msg,
                     "hash": block_hash,
                 },
             )
@@ -963,6 +1180,12 @@ class P2PHandler(BaseHTTPRequestHandler):
 # ----------------------------
 
 def run_server(host: str = HOST, port: int = PORT, advertise_url: str = None, extra_peers=()):
+    # Review F4: a broken config/checkpoints.json must stop the node loudly,
+    # not silently run with no checkpoints.
+    # Review R5: loaded ONCE here and cached; a later bad edit can't make
+    # request handlers raise. Restart the node to pick up a new file.
+    from core import init_checkpoints
+    init_checkpoints()
     global HOST, PORT, ADVERTISE_URL
     HOST = host
     PORT = port

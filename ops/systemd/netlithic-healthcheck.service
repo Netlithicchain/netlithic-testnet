@@ -1,0 +1,13 @@
+[Unit]
+Description=Netlithic testnet health check (read-only; alerts only if enabled in config)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=netlithic
+WorkingDirectory=/opt/netlithic
+ExecStart=/opt/netlithic/venv/bin/python ops/healthcheck.py --config /etc/netlithic/healthcheck.json
+SuccessExitStatus=1
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/netlithic

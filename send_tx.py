@@ -1,7 +1,8 @@
 import argparse
 import json
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from netutil import urlopen
 
 from wallet import Wallet
 

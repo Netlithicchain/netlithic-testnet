@@ -14,14 +14,14 @@ with `--seed URL` or the `NETLITHIC_SEED_URL` environment variable.
 
 **Windows (PowerShell)**
 ```powershell
-git clone <netlithic repo url> netlithic
+git clone https://github.com/Netlithicchain/netlithic-testnet.git netlithic
 cd netlithic
 py join_testnet.py
 ```
 
 **Linux / macOS**
 ```bash
-git clone <netlithic repo url> netlithic
+git clone https://github.com/Netlithicchain/netlithic-testnet.git netlithic
 cd netlithic
 python3 join_testnet.py
 ```

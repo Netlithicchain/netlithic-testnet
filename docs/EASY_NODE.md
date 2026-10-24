@@ -9,8 +9,17 @@ No wallet or key is made, and nothing private leaves your computer.
 3. When the window says "Done", the node is running and starts each time you log in. Open
    http://127.0.0.1:8000/status to see it. If something goes wrong the installer says so in plain words,
    shows what Windows answered, and does NOT say "Done".
-   (Windows runs a small file, `start-node.cmd`, in the Netlithic folder; it works even if your user
-   folder name has spaces, like `C:\Users\Jane Doe`.)
+   - **No administrator needed.** The installer first tries a Windows scheduled task ("Installed as a
+     scheduled task"). Many normal accounts are not allowed to make one ("Access is denied"). Then it
+     puts a small file, `Netlithic Node.cmd`, in your own Startup folder
+     (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`) and says so: "I added the node to your
+     Startup folder instead. It starts when you log in." Either way the node starts right away.
+   - Both methods run a small file, `start-node.cmd`, in the Netlithic folder; it works even if your user
+     folder name has spaces, like `C:\Users\Jane Doe`.
+   - `python easy_node.py uninstall` removes both the task and the Startup file and stops the node. It
+     tells you plainly if anything is left (for example a task made earlier by an administrator: run
+     uninstall once as administrator).
+   - Running the installer again is safe: it stops the old copy first and never leaves two launchers.
 
 ## Mac
 1. Install Python from python.org.

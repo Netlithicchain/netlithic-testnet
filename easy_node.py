@@ -8,7 +8,8 @@ What it does, all on YOUR machine:
   2. makes a data folder (Linux ~/.local/share/Netlithic/node,
      macOS ~/Library/Application Support/Netlithic/node, Windows %LOCALAPPDATA%\\Netlithic\\node)
   3. registers a background service that starts at login and joins the seed nodes
-     (Linux: systemd user service, macOS: launchd agent, Windows: scheduled task)
+     (Linux: systemd user service, macOS: launchd agent, Windows: a scheduled task; if Windows will not
+     let a normal account create one, a launcher in your own Startup folder instead - no admin needed)
 
 No wallet or key is created or sent anywhere: keys stay on your machine.
 Test coins have no value.  Uninstall:  python easy_node.py uninstall
@@ -31,6 +32,11 @@ TASK_NAME = "Netlithic Node"
 LAUNCHER = "start-node.cmd"   # Windows: tiny file the scheduled task runs; it holds the long command
 TR_LIMIT = 261                # schtasks refuses a /TR value longer than this
 WAIT_SECONDS = 45             # how long install waits for the node to answer on /status
+STARTUP_FILE = "Netlithic Node.cmd"   # Windows no-admin fallback: lives in the per-user Startup folder
+DENIED_WORDS = ("access is denied", "access denied", "permission denied", "0x80070005",
+                "requested operation requires elevation")
+CREATE_NO_WINDOW = 0x08000000        # Windows process-creation flags (numbers, so tests run on Linux)
+CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 
 class InstallError(Exception):
@@ -148,6 +154,63 @@ def choose_launcher(base, home):
         f"Try again with a shorter folder, for example:  python easy_node.py install --base-dir C:\\Netlithic")
 
 
+def startup_dir(home=None, env=None):
+    """The per-user Windows Startup folder (no admin needed to write there). Uses %APPDATA%."""
+    home = home or os.path.expanduser("~")
+    env = os.environ if env is None else env
+    roaming = env.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
+    return os.path.join(roaming, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+
+
+def startup_text(launcher_path):
+    """Text of the Startup-folder file: it just calls start-node.cmd (the path is quoted: spaces are fine)."""
+    lines = ["@echo off"]
+    if any(ord(ch) > 127 for ch in launcher_path):
+        lines.append("chcp 65001 >nul")
+    lines += [f"rem {NOTE} Starts your Netlithic node when you log in.",
+              'call "' + launcher_path.replace("%", "%%") + '"']
+    return "\r\n".join(lines) + "\r\n"
+
+
+def is_permission_error(out):
+    o = (out or "").lower()
+    return any(w in o for w in DENIED_WORDS)
+
+
+def ps_quote(s):
+    """A PowerShell single-quoted string (quotes doubled, including the curly ones PowerShell also accepts)."""
+    return "'" + "".join(ch * 2 if ch in "'\u2018\u2019\u201a\u201b" else ch for ch in s) + "'"
+
+
+def stop_node_command(data_dir):
+    """PowerShell command that stops any Python process running THIS install's node (matched by its data
+    folder in the command line; this installer's own process is skipped). Prints the ids it stopped."""
+    ps = ("Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -and "
+          f"$_.ProcessId -ne {os.getpid()} -and "
+          f"$_.CommandLine.IndexOf({ps_quote(data_dir)}, [StringComparison]::OrdinalIgnoreCase) -ge 0 }} | "
+          "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; $_.ProcessId }")
+    return ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps]
+
+
+def stop_running_node(p):
+    """Best effort: stop an already-running node of this install. Returns (worked, plain-words note)."""
+    rc, out = run_cmd(stop_node_command(p["data"]))
+    if rc != 0:
+        return False, out or f"exit code {rc}"
+    return True, (f"stopped process {out.split()[0]}" if out.split() else "nothing was running")
+
+
+def start_detached(path):
+    """Run a .cmd file in the background with no window, and without waiting for it."""
+    flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    kw = {"creationflags": flags} if flags else {}
+    try:
+        subprocess.Popen([path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, close_fds=True, **kw)
+    except OSError as e:
+        raise InstallError(f"Could not start your node from {path}: {e}")
+
+
 def register_commands(plat, svc_path, task_cmd=None):
     if plat == "linux":
         return [["systemctl", "--user", "daemon-reload"],
@@ -177,29 +240,35 @@ def plan(args):
     rel, text = service_file(plat, cmd, os.path.join(base, "node.log"))
     svc = os.path.join(home, rel) if rel else None
     launcher = os.path.join(base, LAUNCHER) if plat == "windows" else None
+    startup = os.path.join(startup_dir(home), STARTUP_FILE) if plat == "windows" else None
     return dict(platform=plat, base=base, venv=vdir, data=data, python=py, command=cmd,
                 service_path=svc, service_text=text, home=home, launcher_path=launcher,
-                task_cmd=task_command(launcher) if launcher else None)
+                task_cmd=task_command(launcher) if launcher else None, startup_path=startup)
 
 
 def say(m=""):
     print(m, flush=True)
 
 
+def node_answers(port):
+    """One quick look: does something answer http://127.0.0.1:<port>/status?"""
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", int(port), timeout=2)
+        try:
+            c.request("GET", "/status")
+            return c.getresponse().status == 200
+        finally:
+            c.close()
+    except (OSError, http.client.HTTPException):
+        return False
+
+
 def wait_for_node(port, seconds=WAIT_SECONDS):
     """True once the node answers http://127.0.0.1:<port>/status, False if it stays silent."""
     end = time.time() + seconds
     while True:
-        try:
-            c = http.client.HTTPConnection("127.0.0.1", int(port), timeout=2)
-            try:
-                c.request("GET", "/status")
-                if c.getresponse().status == 200:
-                    return True
-            finally:
-                c.close()
-        except (OSError, http.client.HTTPException):
-            pass
+        if node_answers(port):
+            return True
         if time.time() >= end:
             return False
         time.sleep(1)
@@ -210,14 +279,67 @@ def _failed(what, cmd, rc, out):
 
 
 def start_service(p):
-    """Register and start the background service. Raises InstallError on the first real failure."""
-    optional = (["launchctl", "unload"], ["schtasks", "/End"])    # fine to fail: nothing was running yet
+    """Register and start the background service. Raises InstallError on the first real failure.
+    Returns "task" (Windows scheduled task, or the Linux/Mac service) or "startup" (Windows, no admin:
+    a launcher in the user's Startup folder)."""
+    if p["platform"] == "windows":
+        return _start_windows(p)
     for c in register_commands(p["platform"], p["service_path"], p["task_cmd"]):
         rc, out = run_cmd(c)
-        if rc != 0 and c[:2] not in optional:
-            what = "Windows could not set up the background task, so your node was NOT started." \
-                if c[0] == "schtasks" else "The background service could not be set up, so your node was NOT started."
-            raise _failed(what, c, rc, out)
+        if rc != 0 and c[:2] != ["launchctl", "unload"]:    # unload fails harmlessly when nothing was loaded
+            raise _failed("The background service could not be set up, so your node was NOT started.", c, rc, out)
+    return "task"
+
+
+def _remove_startup_launcher(p):
+    f = p.get("startup_path")
+    if f and os.path.exists(f):
+        os.remove(f)
+
+
+def _start_windows(p):
+    note = "Windows could not set up the background task, so your node was NOT started."
+    stop_running_node(p)                                       # re-install: never leave two copies running
+    create, end, run = register_commands("windows", None, p["task_cmd"])
+    rc, out = run_cmd(create)
+    if rc != 0:
+        if not is_permission_error(out):
+            raise _failed(note, create, rc, out)
+        return _start_from_startup_folder(p, create, rc, out)
+    try:
+        _remove_startup_launcher(p)                            # an earlier no-admin install: one method only
+    except OSError as e:
+        raise InstallError(f"The task was created, but I could not remove the older Startup-folder file "
+                           f"{p['startup_path']} ({e}). Delete it yourself, or your node would start twice.")
+    run_cmd(end)                                               # may not be running: fine
+    rc, out = run_cmd(run)
+    if rc != 0:
+        raise _failed(note, run, rc, out)
+    say("Installed as a scheduled task (it starts when you log in).")
+    return "task"
+
+
+def _start_from_startup_folder(p, create, rc, out):
+    """No-admin fallback: the account is not allowed to create a scheduled task."""
+    say("Windows would not let this account create a scheduled task, so I added the node to your Startup "
+        "folder instead. It starts when you log in. No admin needed.")
+    run_cmd(["schtasks", "/End", "/TN", TASK_NAME])             # an older admin-made task, if any: best effort
+    rc2, _ = run_cmd(["schtasks", "/Delete", "/F", "/TN", TASK_NAME])
+    if rc2 != 0 and run_cmd(["schtasks", "/Query", "/TN", TASK_NAME])[0] == 0:
+        say("Note: an older scheduled task named 'Netlithic Node' still exists and this account cannot remove it. "
+            "Run 'python easy_node.py uninstall' as administrator once, or your node may try to start twice.")
+    try:
+        os.makedirs(os.path.dirname(p["startup_path"]), exist_ok=True)
+        with open(p["startup_path"], "w", encoding="utf-8", newline="") as f:
+            f.write(startup_text(p["launcher_path"]))
+    except OSError as e:
+        raise InstallError(
+            f"Windows would not let this account create a scheduled task, and I could not write to your Startup "
+            f"folder either, so your node was NOT started.\n  Startup file: {p['startup_path']}\n  problem: {e}\n"
+            f"  scheduled task said: {out or '(nothing)'}\n"
+            f"You can run the installer as administrator instead (right-click PowerShell, 'Run as administrator').")
+    start_detached(p["launcher_path"])
+    return "startup"
 
 
 def _build_env(p, args):
@@ -256,16 +378,20 @@ def install(args):
         os.makedirs(os.path.dirname(p["launcher_path"]), exist_ok=True)
         with open(p["launcher_path"], "w", encoding="utf-8", newline="") as f:
             f.write(p["service_text"])
+    method = None
     if not args.no_service:
-        start_service(p)
+        method = start_service(p)
         say(f"Started. Waiting up to {WAIT_SECONDS} seconds for your node to answer...")
         if not wait_for_node(args.port):
+            where = f" (the file is {p['startup_path']})" if method == "startup" else ""
             raise InstallError(
-                f"The background service was created, but your node did not answer at "
+                f"The background service was created{where}, but your node did not answer at "
                 f"http://127.0.0.1:{args.port}/status within {WAIT_SECONDS} seconds, so I can't say it works.\n"
                 f"It may just be slow to start: try that address in a browser in a minute. If it stays empty, run "
                 f"'python easy_node.py uninstall' and then install again, and send me the text above.")
     say(f"\nDone. Your node runs in the background and joins: {', '.join(SEEDS)}")
+    if method == "startup":
+        say("It will start again each time you log in (from your Startup folder).")
     say(f"Check it in a browser: http://127.0.0.1:{args.port}/status")
     say("To remove it later: python easy_node.py uninstall (your data folder is kept).")
     return p
@@ -285,8 +411,20 @@ def uninstall(args):
                         problems.append(_failed("Windows would not remove the background task, so your node may "
                                                 "still start at login.", c, rc, out))
                 # other 'stop' steps fail harmlessly when the service was not running
+        if p["platform"] == "windows":
+            try:
+                _remove_startup_launcher(p)
+            except OSError as e:
+                problems.append(InstallError(f"I could not remove your Startup-folder file {p['startup_path']} ({e}), "
+                                             "so your node may still start at login. Delete that file yourself."))
+            worked, note = stop_running_node(p)
+            if node_answers(args.port):
+                problems.append(InstallError(
+                    f"Your node is still running and answering at http://127.0.0.1:{args.port}/status "
+                    f"({'could not stop it: ' + note if not worked else note}). Close 'pythonw.exe' in Task Manager, "
+                    "or restart your PC, then run uninstall again."))
         if problems:
-            raise problems[0]
+            raise InstallError("\n\n".join(str(x) for x in problems))
         for f in (p["service_path"], p["launcher_path"]):
             if f and os.path.exists(f):
                 os.remove(f)

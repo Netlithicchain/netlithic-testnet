@@ -110,7 +110,7 @@ class FakeSchtasks:
             if len(tr) > TR_LIMIT:
                 return res(1, "", "ERROR: Value for '/TR' option cannot be more than 261 character(s).")
             if self.fail_create:
-                return res(1, "", "ERROR: Access is denied.")
+                return res(1, "", self.fail_create if isinstance(self.fail_create, str) else "ERROR: Access is denied.")
             return res(0, "SUCCESS: The scheduled task was created.")
         if op == "/run":
             return res(1, "", "ERROR: The system cannot find the file specified.") if self.fail_run \
@@ -131,8 +131,12 @@ def win(tmp_path, monkeypatch):
     monkeypatch.setattr(en.subprocess, "run", fake)
     monkeypatch.setattr(en, "wait_for_node", lambda *a, **k: True, raising=False)
     monkeypatch.setattr(en, "short_path", lambda p: p, raising=False)
+    monkeypatch.setattr(en, "node_answers", lambda port: False, raising=False)
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    started = []                                      # every detached start (nothing real is ever started)
+    monkeypatch.setattr(en.subprocess, "Popen", lambda cmd, *a, **k: started.append((list(cmd), k)), raising=False)
     args = ["install", "--platform", "windows", "--home", str(home), "--base-dir", str(base), "--no-venv"]
-    return types.SimpleNamespace(home=home, base=base, fake=fake, args=args, tmp=tmp_path)
+    return types.SimpleNamespace(home=home, base=base, fake=fake, args=args, tmp=tmp_path, started=started)
 
 
 def _create_call(fake):
@@ -184,13 +188,13 @@ def test_install_runs_task_after_creating_it(win, capsys):
 
 
 def test_schtasks_create_failure_is_loud(win, capsys):
-    win.fake.fail_create = True
+    win.fake.fail_create = "ERROR: The parameter is incorrect."      # not a permission problem
     with pytest.raises(SystemExit) as e:
         en.main(win.args)
     assert e.value.code not in (0, None)
     out = capsys.readouterr()
     assert "Done" not in out.out + out.err
-    assert "Access is denied" in out.out + out.err              # exact schtasks output is shown
+    assert "parameter is incorrect" in out.out + out.err        # exact schtasks output is shown
     assert not any(c[1] == "/Run" for c in win.fake.calls if c[0] == "schtasks")
 
 
@@ -318,3 +322,200 @@ def test_uninstall_when_task_never_existed_is_fine(win, capsys):
     win.fake.fail_delete = True            # schtasks says "cannot find", and a query confirms it is gone
     en.main(["uninstall", "--platform", "windows", "--home", str(win.home), "--base-dir", str(win.base), "--no-venv"])
     assert "Service removed" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# No-admin fallback. On a normal (non-admin) Windows account `schtasks /Create` says "Access is denied"
+# (seen on Aric's real PC). Then the node is started from the per-user Startup folder instead.
+# ---------------------------------------------------------------------------
+STARTUP = os.path.join("Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+
+
+def _startup_file(win):
+    return win.home / "AppData" / "Roaming" / STARTUP / "Netlithic Node.cmd"
+
+
+def _uninstall_args(win):
+    return ["uninstall", "--platform", "windows", "--home", str(win.home), "--base-dir", str(win.base), "--no-venv"]
+
+
+def test_access_denied_falls_back_to_startup_folder(win, capsys):
+    win.fake.fail_create = True
+    en.main(win.args)                                             # exits 0: no SystemExit
+    out = capsys.readouterr().out
+    f = _startup_file(win)
+    assert f.is_file()                                            # right folder, resolved from %APPDATA%
+    text = f.read_bytes().decode("utf-8")                         # bytes: keep the Windows line endings
+    launcher = str(win.base / "start-node.cmd")
+    assert f'call "{launcher}"' in text                           # path has a space and is quoted
+    assert text.startswith("@echo off") and "\r\n" in text
+    assert "Windows would not let this account create a scheduled task" in out
+    assert "Startup folder instead" in out and "No admin needed" in out
+    assert "Installed as a scheduled task" not in out
+    assert "Done" in out
+    assert (win.base / "start-node.cmd").is_file()
+    # node started now, detached, via the launcher, with no console window
+    assert [c for c, k in win.started] == [[launcher]]
+    assert win.started[0][1].get("stdin") is not None
+    assert not any(c[:2] == ["schtasks", "/Run"] for c in win.fake.calls)
+
+
+def test_access_denied_text_variants_are_permission_errors():
+    for t in ("ERROR: Access is denied.", "access denied", "ERROR: Permission denied", "error 0x80070005"):
+        assert en.is_permission_error(t)
+    assert not en.is_permission_error("ERROR: The parameter is incorrect.")
+    assert not en.is_permission_error("")
+
+
+def test_access_denied_but_node_never_answers_is_loud(win, capsys, monkeypatch):
+    win.fake.fail_create = True
+    monkeypatch.setattr(en, "wait_for_node", lambda *a, **k: False, raising=False)
+    with pytest.raises(SystemExit) as e:
+        en.main(win.args)
+    assert e.value.code not in (0, None)
+    out = capsys.readouterr()
+    assert "Done" not in out.out + out.err
+    assert "/status" in out.out + out.err and "Netlithic Node.cmd" in out.out + out.err
+
+
+def test_non_permission_schtasks_failure_does_not_fall_back(win, capsys):
+    win.fake.fail_create = "ERROR: The task name is invalid."
+    with pytest.raises(SystemExit) as e:
+        en.main(win.args)
+    assert e.value.code not in (0, None)
+    out = capsys.readouterr()
+    assert "task name is invalid" in out.out + out.err and "Done" not in out.out + out.err
+    assert not _startup_file(win).exists() and win.started == []
+
+
+def test_startup_folder_not_writable_is_loud(win, capsys, monkeypatch):
+    win.fake.fail_create = True
+    (win.home / "AppData" / "Roaming").mkdir(parents=True)
+    (win.home / "AppData" / "Roaming" / "Microsoft").write_text("a file, so the folder cannot be made")
+    with pytest.raises(SystemExit) as e:
+        en.main(win.args)
+    assert e.value.code not in (0, None)
+    out = capsys.readouterr()
+    assert "Done" not in out.out + out.err and "Access is denied" in out.out + out.err
+    assert "administrator" in out.out + out.err and win.started == []
+
+
+def test_detached_start_failure_is_loud(win, capsys, monkeypatch):
+    win.fake.fail_create = True
+    def boom(*a, **k):
+        raise OSError("blocked")
+    monkeypatch.setattr(en.subprocess, "Popen", boom)
+    with pytest.raises(SystemExit):
+        en.main(win.args)
+    assert "Done" not in capsys.readouterr().out
+
+
+def test_admin_install_says_scheduled_task_and_adds_no_startup_file(win, capsys):
+    en.main(win.args)
+    out = capsys.readouterr().out
+    assert "Installed as a scheduled task" in out and "Startup folder" not in out
+    assert not _startup_file(win).exists() and win.started == []
+
+
+def test_startup_launcher_percent_and_accents():
+    t = en.startup_text("C:\\Users\\50%off user\\Netlithic\\start-node.cmd")
+    assert "50%%off" in t
+    assert "chcp 65001" in en.startup_text("C:\\Users\\Zo\u00eb\\start-node.cmd")
+
+
+def test_startup_dir_uses_appdata_env_not_hardcoded(tmp_path):
+    d = en.startup_dir(str(tmp_path / "home"), {"APPDATA": str(tmp_path / "Odd Roaming")})
+    assert d == str(tmp_path / "Odd Roaming" / STARTUP)
+    assert en.startup_dir(str(tmp_path / "home"), {}) == str(tmp_path / "home" / "AppData" / "Roaming" / STARTUP)
+
+
+def test_reinstall_is_idempotent_on_the_startup_path(win, capsys):
+    win.fake.fail_create = True
+    en.main(win.args)
+    en.main(win.args)
+    files = list(_startup_file(win).parent.iterdir())
+    assert files == [_startup_file(win)]                          # still exactly one launcher
+    stops = [c for c in win.fake.calls if c[0] == "powershell"]
+    assert len(stops) == 2                                        # the old node is stopped before each start
+    assert all(str(win.base / "node") in c[-1] for c in stops)    # matched by THIS install's data folder
+    assert [c for c, k in win.started] == [[str(win.base / "start-node.cmd")]] * 2
+
+
+def test_switching_to_admin_task_removes_old_startup_file(win, capsys):
+    win.fake.fail_create = True
+    en.main(win.args)
+    assert _startup_file(win).exists()
+    win.fake.fail_create = False
+    en.main(win.args)                                             # now run as admin
+    assert not _startup_file(win).exists()                        # never both methods: no double start
+    assert "Installed as a scheduled task" in capsys.readouterr().out
+
+
+def test_stop_command_is_safe_for_odd_paths():
+    c = en.stop_node_command("C:\\Users\\O'Brien\\Netlithic\\node")
+    assert c[0] == "powershell" and "'C:\\Users\\O''Brien" in c[-1]
+    assert '"' not in c[-1]                                       # no double quotes to confuse the command line
+
+
+def test_uninstall_removes_both_task_and_startup_file(win, capsys):
+    win.fake.fail_create = True
+    en.main(win.args)
+    assert _startup_file(win).exists() and (win.base / "start-node.cmd").exists()
+    win.fake.calls.clear()
+    en.main(_uninstall_args(win))
+    assert not _startup_file(win).exists() and not (win.base / "start-node.cmd").exists()
+    ops = [c[1] for c in win.fake.calls if c[0] == "schtasks"]
+    assert "/Delete" in ops and "/End" in ops                     # the task path is cleaned too
+    assert any(c[0] == "powershell" for c in win.fake.calls)      # running node stopped
+    assert "Service removed" in capsys.readouterr().out
+
+
+def test_uninstall_does_not_claim_removal_if_node_still_runs(win, capsys, monkeypatch):
+    win.fake.fail_create = True
+    en.main(win.args)
+    monkeypatch.setattr(en, "node_answers", lambda port: True, raising=False)
+    with pytest.raises(SystemExit) as e:
+        en.main(_uninstall_args(win))
+    assert e.value.code not in (0, None)
+    out = capsys.readouterr()
+    assert "Service removed" not in out.out and "still running" in out.out + out.err
+    assert not _startup_file(win).exists()                        # the login entry is gone anyway
+
+
+def test_uninstall_does_not_claim_removal_if_startup_file_stays(win, capsys, monkeypatch):
+    win.fake.fail_create = True
+    en.main(win.args)
+    real_remove = os.remove
+    def deny(path, *a, **k):
+        if str(path).endswith("Netlithic Node.cmd"):
+            raise PermissionError("denied")
+        return real_remove(path, *a, **k)
+    monkeypatch.setattr(os, "remove", deny)
+    with pytest.raises(SystemExit) as e:
+        en.main(_uninstall_args(win))
+    assert e.value.code not in (0, None)
+    out = capsys.readouterr()
+    assert "Service removed" not in out.out and "Startup-folder file" in out.out + out.err
+    assert _startup_file(win).exists()
+
+
+def test_uninstall_reports_stop_failure_only_if_node_still_answers(win, capsys, monkeypatch):
+    win.fake.fail_create = True
+    en.main(win.args)
+    real = en.run_cmd
+    monkeypatch.setattr(en, "run_cmd", lambda c: (1, "powershell is blocked") if c[0] == "powershell" else real(c))
+    en.main(_uninstall_args(win))                                 # node is not answering: nothing remains
+    assert "Service removed" in capsys.readouterr().out
+    win.fake.fail_create = True
+    en.main(win.args)
+    monkeypatch.setattr(en, "node_answers", lambda port: True, raising=False)
+    with pytest.raises(SystemExit):
+        en.main(_uninstall_args(win))
+    assert "powershell is blocked" in capsys.readouterr().err
+
+
+def test_docs_and_installer_mention_both_methods():
+    root = os.path.dirname(en.__file__)
+    doc = open(os.path.join(root, "docs", "EASY_NODE.md"), encoding="utf-8").read()
+    assert "Startup folder" in doc and "No admin" in doc
+    assert "Startup" in open(os.path.join(root, "install.ps1"), encoding="utf-8").read()

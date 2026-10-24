@@ -26,6 +26,6 @@ No change to the API rules: the server still validates every address itself and 
 transfers. CSP unchanged (`script-src 'self'`); `/send` serves the same index.html; `/qrcode.js` is
 the only new file served.
 
-## Deploy (only with Aric's yes)
+## Deploy (only with the founder's approval)
 Copy `webwallet.py` and `webwallet/static/` to /opt/netlithic on testnet-1 (and node 2 for sync),
 restart `netlithic-webwallet`. Desktop users get it with the next desktop build. Undo: restore the backup.

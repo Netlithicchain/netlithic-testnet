@@ -1,4 +1,4 @@
-"""PROPOSAL pending Aric -- NOT ACTIVE. Time-based values for block-count rules.
+"""PROPOSAL pending founder approval -- NOT ACTIVE. Time-based values for block-count rules.
 
 Before 2026-10-23 every rule was a block count (100-block reorg limit, 1008-block pause expiry,
 144-block address wait and testnet payout epoch). Before block 5000 the chain makes
@@ -16,7 +16,7 @@ DAY = 24 * HOUR
 
 # rule -> intended real time (seconds)
 REORG_LIMIT_SECONDS = 12 * HOUR          # APPROVED 2026-10-23 -> 720, now in core
-PAUSE_EXPIRY_SECONDS = 7 * DAY           # Aric: "about 7 days"
+PAUSE_EXPIRY_SECONDS = 7 * DAY           # founder: "about 7 days"
 PAYOUT_EPOCH_SECONDS = 1 * DAY           # 144 blocks was chosen as ~1 day at 10-min blocks
 MIN_ADDRESS_AGE_SECONDS = 1 * DAY        # APPROVED 2026-10-23 -> 1440, now in contributions
 

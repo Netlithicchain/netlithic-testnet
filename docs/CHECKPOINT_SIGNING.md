@@ -9,10 +9,10 @@ Before, it silently ran with no checkpoints.
 **Adding a checkpoint (each release):**
 1. Pick a height at least 1,440 blocks below the tip.
 2. Read the hash at that height from the founder server *and* from one independent node. They must match.
-3. Add `"height": "hash"` and commit it in a signed commit (Aric's hardware key) in the release PR.
+3. Add `"height": "hash"` and commit it in a signed commit (the founder's hardware key) in the release PR.
    The signed tag `v0.x.y` covers it.
 
 **Proposal (not built):** a detached Ed25519 signature `config/checkpoints.json.sig` from an offline
 checkpoint key (separate from the pause key, made with the same ceremony). Nodes would verify it
 against a pubkey embedded in the release and refuse unsigned or invalid files. That way a tampered file
-on disk can't steer a fresh node. Decision for Aric.
+on disk can't steer a fresh node.

@@ -16,7 +16,7 @@ Test coins have no value. Nothing here is a promise of future coins.
 A real period is 175,200 blocks (about a month at 15 s blocks), far too long to demo.
 So the test network gets short periods starting at a fixed block (the "fork height").
 
-- Rule: `economics.TESTNET_SHORT_EPOCHS = {"netlithic-dev-1": (5000, 1440)}` (Aric 2026-10-22 chose 144; changed to 1440 = ~1 day at 60 s on 2026-10-23).
+- Rule: `economics.TESTNET_SHORT_EPOCHS = {"netlithic-dev-1": (5000, 1440)}` (the founder chose 144 on 2026-10-22; changed to 1440 = ~1 day at 60 s on 2026-10-23).
 - It is a rule in the code, not a field of the genesis settings, so the genesis economics
   hash and the genesis block do **not** change (tested). The live chain keeps its history.
 - It only applies to chain ids starting `netlithic-dev`. Any other chain id (a future mainnet)
@@ -41,8 +41,8 @@ code before the fork height. A restart of each node is needed; no chain reset.
 - `GET /leaderboard`: points this period (used by the explorer leaderboard).
 - `/status` -> `community_payouts` now has `current_epoch` and `testnet_short_epoch`.
 
-## Deploy plan (needs Aric's go-ahead; nothing deployed)
-1. Aric confirms the fork height and period length (confirmed: 5000 / 1440, same height the founder server stops mining and the difficulty fork activates). The fork height must
+## Deploy plan (needs the founder's go-ahead; nothing deployed)
+1. The founder confirms the fork height and period length (confirmed: 5000 / 1440, same height the founder server stops mining and the difficulty fork activates). The fork height must
    be comfortably above the height on deploy day (chain was at 230 on 2026-10-22, about 6 blocks/hour).
 2. Back up chain.json on both servers (`ops/backup_chain.sh`).
 3. Deploy the branch to node 2 first, restart, check `/status` matches node A's height/hash.

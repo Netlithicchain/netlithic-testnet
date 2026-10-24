@@ -39,7 +39,7 @@ if the 10-minute timer keeps running and no one mines faster.
 **Nov 9 release target:** ~17 days from now, around block ~2,800, leaving ~2,200 blocks
 (~15 days) for nodes to update before 5000. The target holds.
 
-## Values from block 5000 (approved by Aric 2026-10-23, set in code on branch `proposals`)
+## Values from block 5000 (approved 2026-10-23, set in code on branch `proposals`)
 
 | Rule | Was | Now (from 5000) | Real time at 60 s | Where |
 |---|---|---|---|---|

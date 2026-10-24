@@ -21,7 +21,7 @@ To ship to normal users we need an Apple Developer account ($99/year), a "Develo
 Application" certificate, and notarization. Set NETLITHIC_MAC_IDENTITY and
 NETLITHIC_NOTARY_PROFILE (or the matching GitHub secrets). Until then Mac builds are test-only.
 
-**Decision (Aric, 2026-10-22):** no Apple Developer account for now. macOS builds stay
+**Decision (the founder, 2026-10-22):** no Apple Developer account for now. macOS builds stay
 test-only (not offered as a public download) until there is real Windows/Linux demand;
 revisit then.
 Linux needs no signing; the .sha256 file lets people check the download.

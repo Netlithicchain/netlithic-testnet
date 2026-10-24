@@ -16,6 +16,6 @@ index >= 5000 it fails the check if it came less than 30 min after the previous 
 or less than 30 min after the previous founder backstop block. Any failure is listed on the page.
 Block index >= 5000 = backstop matches `decide()` in ops/founder_miner.py (mines while `height + 1 < 5000`).
 
-## Deploy (only with Aric's yes)
+## Deploy (only with the founder's approval)
 Copy explorer.py to the explorer host and restart `netlithic-explorer`. Read-only page, no chain
 impact. Undo: redeploy the previous explorer.py.

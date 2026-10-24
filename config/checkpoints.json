@@ -1,5 +1,5 @@
 {
   "_readme": "Release-embedded checkpoints: {\"height\": \"block hash\"}. Add entries only via the procedure in docs/CHECKPOINT_SIGNING.md. A malformed file stops the node at startup.",
-  "_400": "Verified 2026-10-23 identical on both live seeds (137.184.199.238, 157.230.63.97), chain_id netlithic-dev-1; approved by Aric.",
+  "_400": "Verified 2026-10-23 identical on both live seeds (137.184.199.238, 157.230.63.97), chain_id netlithic-dev-1; approved by the founder.",
   "400": "0041d10e973ffedfa721c0be089e1a1f74dce05424cccb7281d822b0e59d16c9"
 }

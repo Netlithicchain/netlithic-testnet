@@ -1,6 +1,6 @@
 # Release plan: Netlithic 0.5.0 (security fork at block 5000)
 
-**Version:** `0.5.0` (in `netlithic_version.py`). Locked 2026-10-23 (Aric approved).
+**Version:** `0.5.0` (in `netlithic_version.py`). Locked 2026-10-23 (founder approved).
 **Target release:** on or before **Sun Nov 9, 2026**, and well before the chain reaches block 5000.
 Every node must run 0.5.0 before block 5000. Older nodes will follow different rules
 from 5000 and split off.
@@ -15,7 +15,7 @@ wallet, explorer, desktop app, `--version`).
 
 ## Order
 
-1. **Before release:** merge the PR into `release-5000` once CI is green. Aric sets
+1. **Before release:** merge the PR into `release-5000` once CI is green. the project key holder sets
    `PAUSE_PUBKEY` (the public key only, from the ceremony). Tag `v0.5.0`.
 2. **Founder server first.** Update it and restart. Check `/status` shows `"version": "0.5.0"`
    and `"fork_ready": true`, and that it keeps syncing and mining for a few hours.

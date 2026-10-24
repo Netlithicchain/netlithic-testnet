@@ -60,7 +60,7 @@ ADDRESS_RE = re.compile(r"^[0-9a-f]{32}$")
 EXPLORER_PATH = re.compile(r"^/explorer(/[A-Za-z0-9._~%-]*)*/?$")
 SYNC_SLACK = 1
 # Pause between blocks. Test-network difficulty is very low right now, so without a
-# pause one PC could add hundreds of empty blocks a minute. Aric to decide the policy.
+# pause one PC could add hundreds of empty blocks a minute. The policy is a founder decision.
 MINE_PACE_SECONDS = float(os.environ.get("NETLITHIC_MINE_PACE", "60"))  # within one block of the seed counts as "up to date"
 
 

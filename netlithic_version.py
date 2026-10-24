@@ -1,6 +1,6 @@
 """Single source of the Netlithic software version.
 
-0.5.0 = the block-5000 security fork release (locked, approved by Aric 2026-10-23).
+0.5.0 = the block-5000 security fork release (locked, approved 2026-10-23).
 A node is "fork-ready" when it enforces the rules that switch on at
 SECURITY_FORK_HEIGHT; /status reports both so the explorer can count upgraded nodes.
 """

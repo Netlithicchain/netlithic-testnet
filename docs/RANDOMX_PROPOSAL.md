@@ -1,4 +1,4 @@
-# RandomX proof-of-work (PROPOSAL, pending Aric)
+# RandomX proof-of-work (PROPOSAL, pending founder approval)
 
 Goal: replace SHA-256 PoW with RandomX (CPU-friendly, ASIC/GPU-resistant, used by Monero)
 at a planned testnet fork height, through the official C library tevador/RandomX.

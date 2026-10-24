@@ -18,12 +18,18 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from netutil import urlopen
+
+from node_pool import DEFAULT_FALLBACK, NodePool, parse_nodes
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
 import economics  # noqa: E402
+import netlithic_version  # noqa: E402
+MAX_POLLED_NODES = 50
+MAX_STATUS_BYTES = 256 * 1024
 from core import tx_id  # noqa: E402
 
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
@@ -36,8 +42,9 @@ def e(v):
 
 
 class NodeReader:
-    def __init__(self, url, cache_seconds=5):
-        self.url, self.ttl = url.rstrip("/"), cache_seconds
+    def __init__(self, url, cache_seconds=5, fallback=None):
+        self.pool = NodePool(parse_nodes(url, fallback), timeout=15)
+        self.url, self.ttl = self.pool.primary, cache_seconds
         self._cache, self._lock = {}, threading.Lock()
 
     def get(self, path):
@@ -45,8 +52,9 @@ class NodeReader:
             hit = self._cache.get(path)
             if hit and time.time() - hit[0] < self.ttl:
                 return hit[1]
-        with urlopen(Request(self.url + path, headers={"Accept": "application/json"}), timeout=15) as r:
-            data = json.loads(r.read().decode() or "{}")
+        code, data = self.pool.request(path)
+        if code >= 400:
+            raise OSError(f"node answered {code} for {path}")
         with self._lock:
             self._cache[path] = (time.time(), data)
         return data
@@ -65,6 +73,93 @@ class NodeReader:
 
     def mempool(self):
         return self.get("/mempool").get("mempool", [])
+
+    def node_statuses(self, max_nodes=MAX_POLLED_NODES, timeout=3):
+        """/status of our node plus every peer it shares (capped, cached 60 s).
+        Unreachable peers are reported as None."""
+        with self._lock:
+            hit = self._cache.get("__node_statuses")
+            if hit and time.time() - hit[0] < 60:
+                return hit[1]
+        own = self.status()
+        out = {own.get("node") or self.url: own}
+        for peer in list(own.get("peers") or [])[:max_nodes]:
+            if not isinstance(peer, str) or peer in out:
+                continue
+            try:
+                with urlopen(Request(peer.rstrip("/") + "/status"), timeout=timeout) as r:
+                    out[peer] = json.loads(r.read(MAX_STATUS_BYTES))
+            except Exception:
+                out[peer] = None
+        with self._lock:
+            self._cache["__node_statuses"] = (time.time(), out)
+        return out
+
+
+def fork_readiness(statuses, fork_height=netlithic_version.FORK_READY_HEIGHT):
+    """Count nodes that report they enforce the block-`fork_height` rules.
+    statuses: {node_url: status dict or None (unreachable)}."""
+    ready, old, versions = 0, 0, {}
+    for st in statuses.values():
+        if not isinstance(st, dict):
+            continue
+        v = str(st.get("version") or "unknown (pre-0.5.0)")
+        versions[v] = versions.get(v, 0) + 1
+        try:
+            ok = bool(st.get("fork_ready")) and int(st.get("security_fork_height")) == fork_height
+        except (TypeError, ValueError):
+            ok = False
+        if ok:
+            ready += 1
+        else:
+            old += 1
+    unreachable = sum(1 for st in statuses.values() if not isinstance(st, dict))
+    return {"ready": ready, "not_ready": old, "unreachable": unreachable,
+            "reachable": ready + old, "fork_height": fork_height, "versions": versions}
+
+
+# ------------------------------------------------------------ founder transparency
+FOUNDER_ADDRESS = "e924523b2614a39b9bb4ff8bfc05e747"
+FOUNDER_STOP_HEIGHT = 5000   # matches ops/founder_miner.py DEFAULTS
+FOUNDER_IDLE_MINUTES = 30
+FOUNDER_MIN_GAP_MINUTES = 30
+
+
+def founder_report(chain, address=FOUNDER_ADDRESS, stop_height=FOUNDER_STOP_HEIGHT,
+                   idle_minutes=FOUNDER_IDLE_MINUTES, min_gap_minutes=FOUNDER_MIN_GAP_MINUTES):
+    """Every block whose reward went to `address`, and whether the backstop rule held.
+    A block with index >= stop_height is a backstop block. It follows the rule when it came
+    at least idle_minutes after the previous block (from anyone) and at least min_gap_minutes
+    after the previous founder backstop block."""
+    blocks, total, last_backstop_ts, ok, problems = [], 0, None, True, []
+    prev_ts = None
+    for b in chain:
+        ts = float(b.get("timestamp") or 0)
+        idx = int(b.get("index") or 0)
+        reward = sum(int(t.get("amount") or 0) + int(t.get("fees") or 0) for t in b.get("transactions", [])
+                     if t.get("type") == "reward" and t.get("recipient") == address)
+        mined = any(t.get("type") == "reward" and t.get("recipient") == address
+                    for t in b.get("transactions", []))
+        if mined:
+            backstop = idx >= stop_height
+            row = {"height": idx, "timestamp": ts, "reward": reward, "backstop": backstop,
+                   "gap_minutes": None if prev_ts is None else (ts - prev_ts) / 60, "ok": True}
+            if backstop:
+                if prev_ts is not None and ts - prev_ts < idle_minutes * 60:
+                    row["ok"] = False
+                    problems.append(f"block {idx}: only {int((ts - prev_ts) // 60)} min after the previous block")
+                if last_backstop_ts is not None and ts - last_backstop_ts < min_gap_minutes * 60:
+                    row["ok"] = False
+                    problems.append(f"block {idx}: two founder blocks within {min_gap_minutes} min")
+                last_backstop_ts = ts
+                ok = ok and row["ok"]
+            blocks.append(row)
+            total += reward
+        prev_ts = ts
+    return {"address": address, "blocks": blocks, "total": total,
+            "count": len(blocks), "backstop_count": sum(1 for r in blocks if r["backstop"]),
+            "rule_followed": ok, "problems": problems, "stop_height": stop_height,
+            "height": int(chain[-1].get("index") or 0) if chain else 0}
 
 
 # ------------------------------------------------------------ tx helpers
@@ -131,6 +226,7 @@ th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);verti
 th{color:var(--muted);font-weight:600;font-size:13px}.mono{font-family:ui-monospace,monospace;word-break:break-all}
 h1{font-size:22px}h2{font-size:17px;color:var(--accent)}.muted{color:var(--muted)}
 .err{background:#5c1020;padding:12px;border-radius:8px}
+.ok{color:#1a7f37}.bad{color:#cf222e}
 """
 
 
@@ -140,9 +236,10 @@ def page(title, body):
 <link rel="icon" href="/static/netlithic-icon.png"><style>{CSS}</style></head><body>
 <div class="banner">Testnet: coins have no value</div>
 <header><a href="/"><img src="/static/netlithic-icon.png" alt="Netlithic"></a>
-<a class="brand" href="/">Netlithic Explorer</a><nav><a href="/">Blocks</a><a href="/economy">Economy</a></nav>
+<a class="brand" href="/">Netlithic Explorer</a><nav><a href="/">Blocks</a><a href="/economy">Economy</a><a href="/leaderboard">Leaderboard</a><a href="/founder">Founder</a></nav>
 <form action="/search" method="get"><input name="q" placeholder="Block height, block hash, tx id or address" maxlength="80">
-<button>Search</button></form></header><main>{body}</main></body></html>"""
+<button>Search</button></form></header><main>{body}</main>
+<footer class="small">Netlithic Explorer {e(netlithic_version.VERSION)}</footer></body></html>"""
 
 
 def kv_table(rows):
@@ -180,6 +277,16 @@ class Explorer:
                  ("Minted NLT", sup.get("minted")), ("Next reward", f"{sup.get('next_block_reward')} NLT")]
         body = "<div class='cards'>" + "".join(
             f"<div class='card'><div class='k'>{e(k)}</div><div class='v'>{e(v)}</div></div>" for k, v in cards) + "</div>"
+        statuses = getattr(self.r, "node_statuses", None)
+        if statuses:
+            try:
+                fr = fork_readiness(statuses())
+                body += (f"<p id='fork-ready'>Nodes ready for the block {e(fr['fork_height'])} upgrade: "
+                         f"<b>{e(fr['ready'])} of {e(fr['reachable'])}</b> reachable"
+                         + (f" ({e(fr['unreachable'])} unreachable)" if fr["unreachable"] else "")
+                         + "</p>")
+            except Exception:
+                pass
         body += "<h2>Latest blocks</h2><table><tr><th>Height</th><th>Hash</th><th>Time</th><th>Txs</th><th>Miner</th></tr>"
         for b in reversed(chain[-25:]):
             miner = next((t.get("recipient") for t in b.get("transactions", []) if t.get("type") == "reward"), None)
@@ -254,6 +361,15 @@ class Explorer:
         if bal.get("locked_or_unvested_nlt") not in (None, "0"):
             rows.append(("Locked / vesting", e(bal["locked_or_unvested_nlt"]) + " NLT"))
         rows.append(("Contribution points", e(cp.get("cp", "0"))))
+        try:
+            pay = self.r.get(f"/payouts?address={quote(addr)}")
+        except Exception:
+            pay = {}
+        if pay:
+            rows += [("Community rewards earned", e(pay.get("earned_nlt", "0")) + " test NLT"),
+                     ("Still unlocking", e(pay.get("vesting_nlt", "0")) + " test NLT"),
+                     ("Unlocked (ready to use)", e(pay.get("claimable_nlt", "0")) + " test NLT"),
+                     ("Points this reward period", e(pay.get("points_this_epoch", "0")))]
         if cp:
             rows.append(("Blocks mined", e(cp.get("blocks_mined", 0))))
         txs = []
@@ -262,7 +378,23 @@ class Explorer:
                 s, r, _, _ = tx_parties(tx)
                 if addr in (s, r):
                     txs.append((tx, b.get("index")))
-        body = f"<h1>Address</h1>{kv_table(rows)}<h2>Activity (latest 100)</h2>" + tx_rows(list(reversed(txs))[:100], height=True)
+        try:
+            waiting = [tx for tx in self.r.mempool() if isinstance(tx, dict) and addr in tx_parties(tx)[:2]]
+        except Exception:
+            waiting = []
+        pend = ""
+        if waiting:
+            items = []
+            for tx in waiting[:50]:
+                s, r, amt, _ = tx_parties(tx)
+                tid = safe_tx_id(tx)
+                what = (f"Sending {e(nlt(amt))} test NLT to {addr_link(r)}" if s == addr
+                        else f"Receiving {e(nlt(amt))} test NLT from {addr_link(s)}")
+                link = f' (<a class="mono" href="/tx/{e(tid)}">{e(short(tid))}</a>)' if tid else ""
+                items.append(f"<li>{what}, on the way{link}</li>")
+            pend = ("<h2>On the way</h2><ul>" + "".join(items) + "</ul><p class='muted'>These transfers will be added "
+                    "in the next block. The balance above only counts coins that have arrived. Test coins have no value.</p>")
+        body = f"<h1>Address</h1>{kv_table(rows)}{pend}<h2>Activity (latest 100)</h2>" + tx_rows(list(reversed(txs))[:100], height=True)
         return "Address", body
 
     def economy(self):
@@ -275,11 +407,88 @@ class Explorer:
             body += (f"<tr><td>{e(name)}</td><td>{addr_link(bk.get('address'))}</td><td>{e(bk.get('allocation'))}</td>"
                      f"<td>{e(bk.get('unlocked'))}</td><td>{e(bk.get('locked'))}</td><td>{e(bk.get('unlock_schedule'))}</td></tr>")
         body += "</table><h2>Community payouts</h2>" + kv_table(
-            [(k.replace("_", " ").capitalize(), e(v)) for k, v in pay.items()])
+            [(k.replace("_", " ").capitalize(), e(json.dumps(v) if isinstance(v, (dict, list)) else v))
+             for k, v in pay.items()])
+        body += "<p class='muted'>Test coins have no value. Payouts unlock gradually and are already counted in each address's balance.</p>"
         body += "<h2>Top contributors</h2><table><tr><th>Address</th><th>Points</th><th>Blocks mined</th></tr>"
         for c in self.r.contributions()[:25]:
             body += f"<tr><td>{addr_link(c.get('address'))}</td><td>{e(c.get('cp'))}</td><td>{e(c.get('blocks_mined', 0))}</td></tr>"
         return "Economy", body + "</table>"
+
+    def leaderboard(self, short_addr=False):
+        data = self.r.get("/leaderboard")
+        rules = data.get("rules", {})
+        toggle = ("<a href='/leaderboard'>Show full addresses</a>" if short_addr
+                  else "<a href='/leaderboard?short=1'>Show shortened addresses</a>")
+        body = ("<h1>Points leaderboard</h1>"
+                "<p class=\"notice\" style=\"background:#111f47;border:1px solid #f5b400;border-radius:8px;padding:10px 14px;margin:0 0 16px\"><strong>Contribution points are recognition only.</strong> They have no dollar value, and there is no promise they convert to NLT. Test coins have no value.</p>"
+                f"<p class='muted'>Reward period {e(data.get('epoch'))}, up to block {e(data.get('height'))}. "
+                f"Next reward share at block {e(data.get('next_payout_height'))}. "
+                "Addresses only: no names. Test coins have no value.</p>"
+                f"<p>{toggle}</p>"
+                "<table><tr><th>#</th><th>Address</th><th>Points</th><th>Blocks with transfers</th>"
+                "<th>Transfers sent</th></tr>")
+        leaders = data.get("leaders", [])
+        for row in leaders:
+            a = str(row.get("address", ""))
+            label = short(a, 8) if short_addr else a
+            body += (f"<tr><td>{e(row.get('rank'))}</td><td><a class='mono' href='/address/{e(quote(a))}'>{e(label)}</a></td>"
+                     f"<td>{e(row.get('points'))}</td><td>{e(row.get('blocks_with_transfers'))}</td>"
+                     f"<td>{e(row.get('transfers_sent'))}</td></tr>")
+        if not leaders:
+            body += "<tr><td colspan='5' class='muted'>No points yet this period.</td></tr>"
+        body += "</table>"
+        body += ("<h2>How points are earned</h2><ul>"
+                 f"<li>Mine a block that carries at least one real transfer: {e(rules.get('per_block_with_transfers', '2.5'))} points.</li>"
+                 f"<li>Send a transfer of at least {e(rules.get('min_transfer_nlt', '1'))} test NLT to someone else: "
+                 f"{e(rules.get('per_transfer_sent', '1'))} point.</li></ul>"
+                 "<h2>Fair-play rules</h2><ul>"
+                 "<li>Sending coins to yourself earns 0 points.</li>"
+                 "<li>Empty blocks (no transfers, or only the miner sending to itself) earn 0 points.</li>"
+                 f"<li>Each sender-and-recipient pair counts for at most {e(rules.get('pair_cap_per_epoch', 10))} "
+                 "transfers per reward period.</li>"
+                 "<li>Points are worked out from the chain by every node, so nobody can edit them.</li></ul>"
+                 "<p class='muted'>Points decide each address's share of community test coins, which have no value.</p>")
+        return "Leaderboard", body
+
+    def founder(self):
+        rep = founder_report(self.r.chain())
+        a = rep["address"]
+        stop = rep["stop_height"]
+        verdict = "yes" if rep["rule_followed"] else "no"
+        cls = "ok" if rep["rule_followed"] else "bad"
+        body = ("<h1>Founder server mining</h1>"
+                "<p class='muted'>Test network. Test coins have no value.</p>"
+                f"<p>Founder/faucet address: <a class='mono' href='/address/{e(quote(a))}'>{e(a)}</a></p>"
+                "<h2>The rule</h2><ul>"
+                f"<li>Before block {e(stop)} the founder server mines normally, like anyone else.</li>"
+                f"<li>From block {e(stop)} it stops mining and only passes along (relays) blocks and transfers.</li>"
+                f"<li>Backstop, so the network never freezes: if <b>nobody</b> has made a block for "
+                f"{FOUNDER_IDLE_MINUTES} minutes, the server may make one block, and never more than "
+                f"1 block per {FOUNDER_MIN_GAP_MINUTES} minutes.</li></ul>")
+        cards = [("Blocks mined", rep["count"]), ("Total mined", f"{nlt(rep['total'])} test NLT"),
+                 (f"Backstop blocks (from {stop})", rep["backstop_count"]),
+                 ("Backstop rule followed", verdict)]
+        body += "<div class='cards'>" + "".join(
+            f"<div class='card'><div class='k'>{e(k)}</div><div class='v'>{e(v)}</div></div>" for k, v in cards) + "</div>"
+        body += (f"<p class='{cls}'><b>Backstop rule followed: {verdict}</b> "
+                 f"<span class='muted'>(checked from the chain up to block {e(rep['height'])}: every founder block "
+                 f"from {e(stop)} came at least {FOUNDER_IDLE_MINUTES} min after the previous block, and no two "
+                 f"within {FOUNDER_MIN_GAP_MINUTES} min)</span></p>")
+        if rep["problems"]:
+            body += "<ul>" + "".join(f"<li>{e(p)}</li>" for p in rep["problems"]) + "</ul>"
+        body += ("<h2>Every block it mined</h2><table><tr><th>Height</th><th>Time</th><th>Reward</th>"
+                 "<th>Kind</th><th>Minutes since previous block</th></tr>")
+        for r in reversed(rep["blocks"]):
+            kind = ("Backstop" + ("" if r["ok"] else " (rule broken)")) if r["backstop"] else f"Normal (before {stop})"
+            gap = "-" if r["gap_minutes"] is None else f"{r['gap_minutes']:.1f}"
+            body += (f"<tr><td><a href='/block/{e(r['height'])}'>{e(r['height'])}</a></td><td>{e(when(r['timestamp']))}</td>"
+                     f"<td>{e(nlt(r['reward']))} test NLT</td><td>{e(kind)}</td><td>{e(gap)}</td></tr>")
+        if not rep["blocks"]:
+            body += "<tr><td colspan='5' class='muted'>No blocks mined by this address yet.</td></tr>"
+        body += ("</table><p class='muted'>Worked out live from the chain, so anyone can check it. "
+                 "Test coins have no value.</p>")
+        return "Founder mining", body
 
     def search(self, q):
         q = (q or "").strip().lower()
@@ -295,7 +504,32 @@ class Explorer:
         return None
 
 
-def make_handler(explorer):
+BASE_PATH_RE = re.compile(r"^(/[A-Za-z0-9._~-]+)*$")
+
+
+def normalize_base_path(bp):
+    """'' (default) or a clean prefix like '/explorer' (no trailing slash)."""
+    bp = (bp or "").strip().rstrip("/")
+    if bp and not bp.startswith("/"):
+        bp = "/" + bp
+    if not BASE_PATH_RE.match(bp):
+        raise ValueError("base path may only contain letters, digits, '.', '_', '~', '-' and '/'")
+    return bp
+
+
+_LINK_RE = re.compile(r"""((?:href|src|action)=["'])/(?!/)""")
+
+
+def with_base(html, base):
+    """Prefix every root-relative href/src/action with the base path."""
+    if not base:
+        return html
+    return _LINK_RE.sub(lambda m: m.group(1) + base + "/", html)
+
+
+def make_handler(explorer, base_path=""):
+    base_path = normalize_base_path(base_path)
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "NetlithicExplorer"
 
@@ -303,6 +537,8 @@ def make_handler(explorer):
             return
 
         def send(self, code, body, ctype="text/html; charset=utf-8", extra=()):
+            if isinstance(body, str) and ctype.startswith("text/html"):
+                body = with_base(body, base_path)
             data = body.encode() if isinstance(body, str) else body
             self.send_response(code)
             self.send_header("Content-Type", ctype)
@@ -320,6 +556,12 @@ def make_handler(explorer):
 
         def do_GET(self):
             u = urlparse(self.path)
+            if base_path:
+                # Works with Caddy handle_path (prefix stripped) or handle (prefix kept).
+                if u.path == base_path:
+                    return self.send(301, "", extra=[("Location", base_path + "/")])
+                if u.path.startswith(base_path + "/"):
+                    u = u._replace(path=u.path[len(base_path):])
             parts = [p for p in u.path.split("/") if p]
             try:
                 if u.path == "/static/netlithic-icon.png":
@@ -331,11 +573,16 @@ def make_handler(explorer):
                     return self.send(200, page(*explorer.home()))
                 if parts == ["economy"]:
                     return self.send(200, page(*explorer.economy()))
+                if parts == ["leaderboard"]:
+                    sh = (parse_qs(u.query).get("short") or [""])[0] == "1"
+                    return self.send(200, page(*explorer.leaderboard(sh)))
+                if parts == ["founder"]:
+                    return self.send(200, page(*explorer.founder()))
                 if parts == ["search"]:
                     q = (parse_qs(u.query).get("q") or [""])[0][:80]
                     target = explorer.search(q)
                     if target:
-                        return self.send(302, "", extra=[("Location", target)])
+                        return self.send(302, "", extra=[("Location", base_path + target)])
                     return self.send(404, page("Not found", f"<h1>Nothing found for <span class='mono'>{e(q)}</span></h1>"
                                                "<p class='muted'>Try a block height, a 64-character block hash or tx id, "
                                                "or a 32-character address.</p>"))
@@ -366,12 +613,20 @@ def make_handler(explorer):
 def main(argv=None):
     p = argparse.ArgumentParser(description="Netlithic block explorer (read-only)")
     p.add_argument("--node", default=os.environ.get("NETLITHIC_EXPLORER_NODE", "http://127.0.0.1:8000"))
+    p.add_argument("--fallback-node", default=os.environ.get("NETLITHIC_FALLBACK_NODES", DEFAULT_FALLBACK),
+                   help="comma-separated nodes to use when --node is down ('' = none)")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8081)
     p.add_argument("--cache-seconds", type=float, default=5)
+    p.add_argument("--base-path", default=os.environ.get("EXPLORER_BASE_PATH", ""),
+                   help="URL prefix when served behind a proxy, e.g. /explorer (default: none)")
     args = p.parse_args(argv)
-    print(f"Netlithic explorer on http://{args.host}:{args.port} reading {args.node} (testnet: coins have no value)")
-    ThreadingHTTPServer((args.host, args.port), make_handler(Explorer(NodeReader(args.node, args.cache_seconds)))).serve_forever()
+    try:
+        bp = normalize_base_path(args.base_path)
+    except ValueError as err:
+        p.error(str(err))
+    print(f"Netlithic explorer on http://{args.host}:{args.port}{bp}/ reading {args.node} (testnet: coins have no value)")
+    ThreadingHTTPServer((args.host, args.port), make_handler(Explorer(NodeReader(args.node, args.cache_seconds, args.fallback_node)), bp)).serve_forever()
 
 
 if __name__ == "__main__":

@@ -34,7 +34,10 @@
   <h2>Write down your backup code</h2>
   <p>If you lose this device or clear your browser, this code is the <b>only</b> way to get your wallet back. Write it on paper and keep it somewhere safe. Never share it with anyone, and nobody from Netlithic will ever ask for it.</p>
   <p id="backup-code" class="code"></p>
-  <button id="b-download" class="plain">Also download a locked backup file</button>
+  <div class="row">
+    <button id="b-download" class="plain">Also download a locked backup file</button>
+    <button id="b-print-new" class="plain">Print a backup page</button>
+  </div>
   <label class="check"><input id="c-wrote" type="checkbox"> I wrote down my backup code</label>
   <button id="b-backup-done" class="big" disabled>Open my wallet</button>
 </section>
@@ -49,38 +52,118 @@
   <button class="plain b-back">Back</button>
 </section>
 
+<section id="v-save" hidden>
+  <h2>Save your backup</h2>
+  <p>Do these steps once, so you can always get your wallet back. It takes about a minute. Your secret key stays on this device: nothing here is sent to our server.</p>
+  <div class="card step">
+    <h3>Step 1: Save a backup file</h3>
+    <p class="small">The file is locked with your wallet password. Keep it somewhere safe, like a USB stick or your own cloud folder.</p>
+    <button id="b-save-file" class="plain">Download my backup file</button>
+  </div>
+  <div class="card step">
+    <h3>Step 2 (optional): Print a backup page</h3>
+    <p class="small">A paper copy with your backup code. Anyone who has it can take your test coins, so keep it private.</p>
+    <button id="b-save-print" class="plain">Print a backup page</button>
+  </div>
+  <div class="card step">
+    <h3>Step 3: Check your backup works</h3>
+    <p class="small">Pick the backup file you just saved and type its password, <b>or</b> type your backup code. We open it here on this device and check it really brings back this wallet.</p>
+    <label>Backup file<input id="k-file" type="file" accept=".json,application/json"></label>
+    <label>Password of the backup file<input id="k-pass" type="password" autocomplete="current-password"></label>
+    <label>Or your backup code<input id="k-code" type="text" autocomplete="off" spellcheck="false" placeholder="abcd-1234-..."></label>
+    <button id="b-check" class="big">Check my backup</button>
+    <p id="k-result" class="small" role="status" hidden></p>
+  </div>
+  <button id="b-save-close" class="plain">Back to my wallet</button>
+</section>
+
 <section id="v-unlock" hidden>
   <h2>Unlock your wallet</h2>
   <label>Password<input id="u-pass" type="password" autocomplete="current-password"></label>
+  <label class="check" id="u-stay-row"><input id="u-stay" type="checkbox"> Stay unlocked for 15 minutes in this tab (only on a device you trust)</label>
   <button id="b-unlock" class="big">Unlock</button>
   <button id="b-forget" class="plain danger">Remove wallet from this device</button>
 </section>
 
 <section id="v-home" hidden>
+  <div class="card nag" id="h-backup-nag" hidden>
+    <b>Your backup isn't checked yet.</b>
+    <p class="small">If this device is lost or the browser is cleared, a checked backup is the only way back into your wallet.</p>
+    <button id="b-backup-start" class="big">Save your backup</button>
+  </div>
   <div class="card">
+    <p class="small" id="h-stay" hidden><span id="h-stay-text"></span><button id="b-lock-now" class="link">Lock now</button></p>
     <div class="label">Your balance</div>
     <div class="balance"><span id="h-balance">…</span> <small>test NLT</small></div>
     <div class="label">Contribution points: <span id="h-points">…</span></div>
+    <div class="label pend-total" id="h-pending-total" hidden></div>
+  </div>
+  <div class="card" id="h-moving-card" hidden>
+    <h2>Coins on the move</h2>
+    <ul id="h-moving" class="moving"></ul>
+    <p class="small">"On the way" means the network has the transfer and it will be added in the next block. Your balance above only changes once it has arrived. Test coins have no value.</p>
+  </div>
+  <div class="card" id="h-payout-card">
+    <h2>Community rewards</h2>
+    <p class="small">Every reward period, the network shares test coins with people who helped, based on their points. Test coins have no value.</p>
+    <div class="label">Points this period: <span id="h-pts-epoch">…</span></div>
+    <div class="label">Earned so far: <span id="h-earned">…</span> test NLT</div>
+    <div class="label">Still unlocking: <span id="h-vesting">…</span> test NLT</div>
+    <div class="label">Ready to use: <span id="h-claimable">…</span> test NLT</div>
+    <p class="small" id="h-next-payout"></p>
   </div>
   <div class="card">
     <div class="label">Your address (share this to receive coins)</div>
     <p id="h-address" class="code small"></p>
-    <button id="b-copy" class="plain">Copy address</button>
+    <div class="row">
+      <button id="b-copy" class="plain">Copy address</button>
+      <button id="b-share" class="plain">Share</button>
+      <button id="b-qr" class="plain">Show QR code</button>
+    </div>
+    <div id="h-qr-box" class="qrbox" hidden>
+      <canvas id="h-qr" width="232" height="232" aria-label="QR code of your share link"></canvas>
+      <p class="small">Scan to open the wallet with your address filled in. Test coins have no value.</p>
+    </div>
+    <a id="h-history" class="plain" hidden>See my coins move in the explorer</a>
+  </div>
+  <div class="card" id="h-activity-card">
+    <h2>Activity</h2>
+    <ul id="h-activity" class="activity"></ul>
+    <p id="h-activity-empty" class="small">Nothing yet. When coins come in or go out, they show up here.</p>
+    <button id="b-more" class="plain" hidden>Show older activity</button>
+    <p class="small">Test coins have no value.</p>
   </div>
   <button id="b-drip" class="big">Get free test coins</button>
   <div class="card">
     <h2>Send coins</h2>
+    <p id="s-prefill" class="small note" hidden>Address filled in from a share link. Check it, type an amount, then press Review. Nothing is sent until you press "Yes, send it". <button id="b-prefill-save" class="link">Add to contacts</button></p>
+    <label id="s-contact-row" hidden>Pick a contact<select id="s-contact"><option value="">Choose someone…</option></select></label>
     <label>Send to (their address)<input id="s-to" type="text" autocomplete="off" spellcheck="false" maxlength="40"></label>
     <label>How many test NLT<input id="s-amount" type="text" inputmode="decimal" autocomplete="off" maxlength="20"></label>
     <button id="b-review" class="big">Review</button>
+    <a id="s-track" class="plain" hidden>Watch this transfer in the explorer</a>
     <div id="s-confirm" class="confirm" hidden>
       <p id="s-summary"></p>
       <button id="b-send" class="big">Yes, send it</button>
       <button id="b-cancel" class="plain">Cancel</button>
     </div>
   </div>
+  <div class="card" id="h-contacts-card">
+    <h2>Contacts</h2>
+    <p class="small">Give addresses a name, so you can send without copying long codes. Names are kept only on this device and are never sent to our server.</p>
+    <ul id="h-contacts" class="contacts"></ul>
+    <label>Name<input id="n-name" type="text" autocomplete="off" maxlength="40"></label>
+    <label>Address<input id="n-addr" type="text" autocomplete="off" spellcheck="false" maxlength="40"></label>
+    <button id="b-contact-add" class="plain">Save contact</button>
+  </div>
+  <div class="card" id="h-notify-card">
+    <h2>Notifications</h2>
+    <p class="small" id="h-notify-text">Want a heads-up when test coins arrive or a reward share lands? This is off unless you turn it on.</p>
+    <button id="b-notify" class="plain">Tell me when coins arrive</button>
+  </div>
   <div class="row">
     <button id="b-refresh" class="plain">Refresh</button>
+    <button id="b-backup-steps" class="plain">Save your backup</button>
     <button id="b-backup-again" class="plain">Download backup file</button>
     <button id="b-lock" class="plain">Lock</button>
   </div>
@@ -92,11 +175,25 @@
 <p>There is no "forgot password" here. If this browser's data is cleared or the device is lost, your backup code (or backup file plus its password) is the only way back in.</p></details>
 <details><summary>What are contribution points?</summary>
 <p>You earn points by helping the network, for example by sending transfers or running a node. Points show how much you've taken part.</p></details>
+<details><summary>How do community rewards work?</summary>
+<p>Your points from each reward period decide your share of that period's community rewards (at most 25,000 test NLT per address). Rewards unlock bit by bit over the next 6 periods. Unlocked rewards are already in your balance, so there's nothing to claim. These are test coins with no value.</p></details>
 <details><summary>What is the fee?</summary>
 <p>Each transfer includes a tiny fee that goes to whoever adds it to the network. On the test network it's paid in test coins, which have no value.</p></details>
 </main>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<div id="print-sheet" class="print-sheet" hidden>
+  <h1>Netlithic wallet backup (test network)</h1>
+  <p>Test coins have no value. Keep this page private: anyone who has the backup code can use this wallet.</p>
+  <p><b>Address</b> (safe to share)</p>
+  <p id="p-address" class="pcode"></p>
+  <p><b>Backup code</b> (never share this)</p>
+  <p id="p-code" class="pcode"></p>
+  <p id="p-date"></p>
+  <p>To get your wallet back: open the Netlithic wallet, press "Bring back my wallet", and type this backup code.</p>
+</div>
 <script src="/nacl-fast.min.js"></script>
 <script src="/wallet-core.js"></script>
+<script src="/qrcode.js"></script>
 <script src="/wallet.js"></script>
 </body>
 </html>

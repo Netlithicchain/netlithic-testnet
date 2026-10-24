@@ -1,7 +1,8 @@
 import json
 import time
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from netutil import urlopen
 
 from wallet import Wallet
 

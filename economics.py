@@ -53,6 +53,28 @@ DEFAULT_POINTS_PER_TX_TENTHS = 10      # 1 point per transfer sent
 MIN_POINT_TRANSFER = 1 * BASE_UNITS_PER_NLT
 PAIR_CAP_PER_EPOCH = 10
 
+# ---- Testnet-only short payout epochs (a code rule, NOT a config field) ----
+# chain_id -> (fork_height, short_epoch_blocks). From fork_height on, community payout
+# epochs on that chain are short_epoch_blocks long, so a payout can be shown soon.
+# It lives in code (not in Economics fields), so params_hash() and the genesis block
+# are unchanged; every node running this code applies it at the same height.
+# Only chains whose chain_id starts with DEV_CHAIN_PREFIX can use it; any other
+# chain_id (mainnet) is refused below and keeps the normal 175,200-block epoch.
+# Aric confirmed 2026-10-22: fork at block 5000 (same height the founder server
+# stops mining and the difficulty fork activates), epoch 144 blocks
+# (~1 day at the founder miner's 10-minute pace; ~2.4 h at 1-minute blocks).
+# Updated by Aric 2026-10-23: 1440 blocks (~1 day at 60 s). First payout at block 6440.
+# EXPLICIT chain_id dependency (review note): the 1440-block daily period
+# applies ONLY when config/genesis_config.json has chain_id == SHORT_EPOCH_CHAIN_ID.
+# Any other chain_id (a renamed testnet, mainnet) silently keeps the normal
+# 175,200-block epochs. If the testnet chain_id ever changes, update this
+# constant in the same release (test_short_epoch_bound_to_shipped_chain_id in tests/test_review_fixes.py guards it).
+SHORT_EPOCH_CHAIN_ID = "netlithic-dev-1"
+SHORT_EPOCH_START_HEIGHT = 5000
+SHORT_EPOCH_BLOCKS = 1440
+TESTNET_SHORT_EPOCHS = {SHORT_EPOCH_CHAIN_ID: (SHORT_EPOCH_START_HEIGHT, SHORT_EPOCH_BLOCKS)}
+
+
 CONFIG_PATH = os.environ.get(
     "NETLITHIC_GENESIS_CONFIG",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "genesis_config.json"),
@@ -128,14 +150,50 @@ class Economics:
         return self.allocation_amount(bucket) - self.unlocked(bucket, height)
 
     # ---- community payouts ----
+    def short_epoch(self):
+        """(fork_height, length) of the testnet short-epoch rule, or None (mainnet)."""
+        if not is_dev_chain(self.chain_id):
+            return None
+        rule = TESTNET_SHORT_EPOCHS.get(self.chain_id)
+        if not rule:
+            return None
+        fork, length = int(rule[0]), int(rule[1])
+        return (fork, length) if fork > 0 and length > 0 else None
+
+    def epoch_length_at(self, height: int) -> int:
+        se = self.short_epoch()
+        return se[1] if se and height >= se[0] else self.epoch_blocks
+
+    def epoch_id(self, height: int) -> int:
+        """Epoch number of the block at `height` (used for payouts and the pair cap)."""
+        se = self.short_epoch()
+        if not se or height < se[0]:
+            return height // self.epoch_blocks
+        fork, length = se
+        return fork // self.epoch_blocks + 1 + (height - fork) // length
+
     @property
     def vesting_blocks(self) -> int:
         return self.vesting_epochs * self.epoch_blocks
 
+    def vesting_blocks_at(self, height: int) -> int:
+        return self.vesting_epochs * self.epoch_length_at(height)
+
     def is_epoch_block(self, height: int) -> bool:
+        se = self.short_epoch()
+        if se and height >= se[0]:
+            return height > se[0] and (height - se[0]) % se[1] == 0
         return height > 0 and height % self.epoch_blocks == 0
 
     def next_epoch_height(self, height: int) -> int:
+        """First epoch (payout) block strictly after `height`."""
+        se = self.short_epoch()
+        if se:
+            fork, length = se
+            if height < fork:
+                cand = (height // self.epoch_blocks + 1) * self.epoch_blocks
+                return cand if cand < fork else fork + length
+            return fork + ((height - fork) // length + 1) * length
         return (height // self.epoch_blocks + 1) * self.epoch_blocks
 
     def allocation_amount(self, bucket: str) -> int:

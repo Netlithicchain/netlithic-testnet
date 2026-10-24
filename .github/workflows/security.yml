@@ -1,0 +1,54 @@
+name: security
+
+on:
+  push:
+    branches: [main, release-5000, security-hardening]
+  pull_request:
+  schedule:
+    - cron: "0 9 * * 1"   # weekly, Monday 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pytest -q
+
+  bandit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install bandit
+      # Fails the job on medium+ severity with medium+ confidence. Reviewed false
+      # positives are marked inline with `# nosec <id> - reason`.
+      - run: bandit -r . -x ./tests,./.venv-desktop-build,./desktop/build,./desktop/dist --severity-level medium --confidence-level medium
+
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install pip-audit
+      - run: pip-audit -r requirements.txt
+      - run: pip-audit -r desktop/requirements-desktop.txt
+
+  semgrep:
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v5
+      - run: semgrep scan --config p/python --config p/secrets --metrics=off --error --exclude '*.json'

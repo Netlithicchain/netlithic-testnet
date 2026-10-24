@@ -24,7 +24,8 @@ import sys
 import time
 import venv
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from netutil import urlopen
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SEED = os.environ.get("NETLITHIC_SEED_URL", "http://137.184.199.238:8000")

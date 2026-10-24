@@ -24,7 +24,7 @@ def wallets(tmp_path, monkeypatch):
 
 def build_block(bc, txs, chain=None, difficulty=None, timestamp=None):
     """Mine a block with an arbitrary transaction list on top of `chain`."""
-    from core import Block
+    from core import Block, meets_pow
     chain = chain if chain is not None else bc.chain
     prev = chain[-1]
     if difficulty is None:
@@ -34,7 +34,7 @@ def build_block(bc, txs, chain=None, difficulty=None, timestamp=None):
     while True:
         h = bc.calculate_hash(index=prev.index + 1, timestamp=ts, transactions=txs,
                               previous_hash=prev.hash, nonce=nonce, difficulty=difficulty)
-        if h.startswith("0" * difficulty):
+        if meets_pow(h, difficulty, prev.index + 1):
             return Block(index=prev.index + 1, timestamp=ts, transactions=txs,
                          previous_hash=prev.hash, nonce=nonce, difficulty=difficulty, hash=h)
         nonce += 1
@@ -49,6 +49,8 @@ def node(tmp_path, monkeypatch):
     No sync thread is started, so it never contacts any peer."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("NETLITHIC_ADMIN_TOKEN", TEST_ADMIN_TOKEN)
+    # Local test nets run on 127.0.0.1; production refuses private peers (R1/R2).
+    monkeypatch.setenv("NETLITHIC_ALLOW_PRIVATE_PEERS", "1")
     monkeypatch.delenv("NETLITHIC_DEV_LOCAL_ADMIN", raising=False)
     import p2p_http
     p2p = importlib.reload(p2p_http)  # fresh Blockchain() in tmp_path
@@ -99,7 +101,8 @@ def node_procs(tmp_path):
         port = free_port()
         p = subprocess.Popen([sys.executable, os.path.join(ROOT, "node.py"), str(port),
                               "--data-dir", str(tmp_path / f"node{port}"), *extra],
-                             env={**os.environ, "NETLITHIC_ADMIN_TOKEN": TEST_ADMIN_TOKEN},
+                             env={**os.environ, "NETLITHIC_ADMIN_TOKEN": TEST_ADMIN_TOKEN,
+                                  "NETLITHIC_ALLOW_PRIVATE_PEERS": "1"},
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         procs.append(p)
         wait_status(port)
@@ -109,3 +112,12 @@ def node_procs(tmp_path):
     for p in procs:
         p.terminate()
         p.wait(timeout=10)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_checkpoint_cache():
+    """Checkpoints are cached per process (R5); give each test a clean cache."""
+    import core
+    core.reset_checkpoints()
+    yield
+    core.reset_checkpoints()

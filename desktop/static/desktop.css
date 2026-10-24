@@ -1,0 +1,6 @@
+.earn h2{margin-top:0}
+button.earn-btn{font-size:22px;padding:18px}
+button.earn-btn.on{background:#16a34a}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}
+.stats div{background:#0e1d3d;border-radius:8px;padding:10px}
+.stats b{display:block;font-size:20px}

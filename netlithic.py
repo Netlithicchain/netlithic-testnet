@@ -10,13 +10,15 @@ import json
 import os
 import sys
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from netutil import urlopen
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
 import economics  # noqa: E402
 import node as node_mod  # noqa: E402
+import netlithic_version  # noqa: E402
 import wallet as wallet_mod  # noqa: E402
 
 DEFAULT_NODE = f"http://127.0.0.1:{node_mod.DEFAULT_PORT}"
@@ -278,6 +280,7 @@ def cmd_genesis(args):
 
 def build_parser():
     p = argparse.ArgumentParser(prog="netlithic", description="Netlithic command-line tool")
+    p.add_argument("--version", action="version", version=netlithic_version.version_string())
     sub = p.add_subparsers(dest="command", required=True)
 
     def with_node(sp):

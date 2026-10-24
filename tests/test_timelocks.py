@@ -249,7 +249,7 @@ def test_status_and_balance_show_locks_and_vesting(node, wallets):
     assert s["buckets"]["treasury"]["unlocked"] == "3125000"
     assert s["buckets"]["treasury"]["locked"] == "146875000"
     assert s["buckets"]["reserve"]["unlocked"] == "0"
-    assert s["community_payouts"]["next_epoch_height"] == eco.BLOCKS_PER_MONTH
+    assert s["community_payouts"]["next_epoch_height"] == bc.econ.next_epoch_height(2)
     assert s["community_payouts"]["per_address_cap"] == "25000"
     assert s["community_payouts"]["treasury_reserve_spend_approval"] == "none"
     with urllib.request.urlopen(f"{node.self_url()}/balance?address={alice.address}") as r:

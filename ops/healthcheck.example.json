@@ -1,0 +1,17 @@
+{
+  "_readme": "Copy to /etc/netlithic/healthcheck.json (chmod 600). Alerts stay OFF until enabled is true and a webhook_url or email is filled in.",
+  "enabled": false,
+  "nodes": ["http://127.0.0.1:8000", "http://127.0.0.1:8001"],
+  "faucet_info_url": "http://127.0.0.1:8090/api/info",
+  "faucet_min_nlt": 200,
+  "stall_minutes": 30,
+  "max_height_gap": 3,
+  "cert_hosts": ["testnet.netlithicchain.com"],
+  "cert_min_days": 14,
+  "disk_paths": ["/"],
+  "disk_min_free_pct": 15,
+  "state_file": "/var/lib/netlithic/healthcheck_state.json",
+  "repeat_minutes": 360,
+  "webhook_url": "",
+  "email": {"smtp_host": "", "smtp_port": 587, "username": "", "password_file": "", "from": "", "to": []}
+}

@@ -23,7 +23,10 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from netutil import urlopen
+
+from node_pool import DEFAULT_FALLBACK, NodePool, parse_nodes
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
@@ -65,21 +68,12 @@ def load_faucet_wallet(path):
 
 
 class NodeClient:
-    def __init__(self, url):
-        self.url = url.rstrip("/")
+    def __init__(self, url, fallback=None):
+        self.pool = NodePool(parse_nodes(url, fallback), timeout=10)
+        self.url = self.pool.primary
 
     def _req(self, path, payload=None):
-        data = None if payload is None else json.dumps(payload).encode()
-        req = Request(self.url + path, data=data, method="GET" if data is None else "POST",
-                      headers={"Content-Type": "application/json"})
-        try:
-            with urlopen(req, timeout=10) as r:
-                return r.status, json.loads(r.read().decode() or "{}")
-        except HTTPError as e:
-            try:
-                return e.code, json.loads(e.read().decode() or "{}")
-            except Exception:
-                return e.code, {}
+        return self.pool.request(path, payload)
 
     def status(self):
         return self._req("/status")[1]
@@ -295,6 +289,8 @@ def make_handler(faucet, trust_proxy=False):
 def main(argv=None):
     p = argparse.ArgumentParser(description="Netlithic TESTNET faucet (test coins have no value)")
     p.add_argument("--node", default=os.environ.get("NETLITHIC_FAUCET_NODE", "http://127.0.0.1:8000"))
+    p.add_argument("--fallback-node", default=os.environ.get("NETLITHIC_FALLBACK_NODES", DEFAULT_FALLBACK),
+                   help="comma-separated nodes to use when --node is down ('' = none)")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8090)
     p.add_argument("--amount-nlt", default="10")
@@ -311,7 +307,7 @@ def main(argv=None):
         return 1
     limiter = RateLimiter(args.state_file, int(args.cooldown_hours * 3600),
                           economics.parse_nlt(args.daily_cap_nlt))
-    faucet = Faucet(w, NodeClient(args.node), limiter, economics.parse_nlt(args.amount_nlt))
+    faucet = Faucet(w, NodeClient(args.node, args.fallback_node), limiter, economics.parse_nlt(args.amount_nlt))
     try:
         cid = faucet.chain_id()
     except FaucetError as e:

@@ -1,0 +1,11 @@
+*.json
+!config/*.json
+.venv*
+testnet-node
+__pycache__
+tests
+desktop
+docs
+.git
+*.txt
+!requirements.txt

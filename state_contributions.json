@@ -1,0 +1,16 @@
+{
+  "users": {
+    "d95b2a31ad330551ec0534627188ffd7": {
+      "cp": 10,
+      "node_uptime": 0,
+      "tx_count": 0,
+      "last_seen": 0
+    },
+    "5f7159f176690755948118f646ee0533": {
+      "cp": 75,
+      "node_uptime": 0,
+      "tx_count": 0,
+      "last_seen": 0
+    }
+  }
+}

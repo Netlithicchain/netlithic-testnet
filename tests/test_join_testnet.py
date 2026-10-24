@@ -19,7 +19,7 @@ def wait(url, t=30):
 
 def test_join_script_syncs_with_local_seed(tmp_path):
     seed_port, join_port = free_port(), free_port()
-    env = {**os.environ, "NETLITHIC_ADMIN_TOKEN": TEST_ADMIN_TOKEN}
+    env = {**os.environ, "NETLITHIC_ADMIN_TOKEN": TEST_ADMIN_TOKEN, "NETLITHIC_ALLOW_PRIVATE_PEERS": "1"}
     env.pop("NETLITHIC_DEV_LOCAL_ADMIN", None)
     seed = subprocess.Popen([sys.executable, os.path.join(ROOT, "netlithic.py"), "node", "start", str(seed_port),
                              "--data-dir", str(tmp_path / "seed")], env=env,
@@ -33,6 +33,7 @@ def test_join_script_syncs_with_local_seed(tmp_path):
             urllib.request.urlopen(req, timeout=120).read()
         data = tmp_path / "me"
         jenv = {k: v for k, v in os.environ.items() if k != "NETLITHIC_ADMIN_TOKEN"}
+        jenv["NETLITHIC_ALLOW_PRIVATE_PEERS"] = "1"  # 127.0.0.1 test net
         r = subprocess.run([sys.executable, os.path.join(ROOT, "join_testnet.py"), "--no-venv",
                             "--seed", seed_url, "--port", str(join_port), "--data-dir", str(data),
                             "--advertise-url", f"http://127.0.0.1:{join_port}",

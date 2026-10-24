@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import pause
 from wallet import verify_signed_tx, pubkey_to_address, multisig_message, verify_signature
 import contributions
 import economics
@@ -24,7 +25,101 @@ CHAIN_FILE = "chain.json"
 MAX_FUTURE_BLOCK_SECONDS = 120
 MAX_BLOCK_TXS = 1000  # signed transfers per block; miners fill it highest-fee first  # reject blocks timestamped >2 min ahead of our clock
 
+# ---- Difficulty fork (LWMA) ----
+# Blocks below LWMA_FORK_HEIGHT keep the original rule: `difficulty` = number of
+# leading hex zeros, retargeted every 10 blocks. From LWMA_FORK_HEIGHT on,
+# `difficulty` means expected hashes per block ("work"): a block is valid when
+# int(hash, 16) * work < 2**256, and work is retargeted every block with a
+# linearly weighted moving average (LWMA) of recent solve times. These are code
+# constants, not genesis settings, so the genesis economics_sha256 is unchanged.
+LWMA_FORK_HEIGHT = 5000
+LWMA_TARGET_BLOCK_TIME = 60        # seconds per block after the fork
+LWMA_WINDOW = 45                   # blocks in the average
+LWMA_MIN_WORK = 256                # = old difficulty 2 (two leading hex zeros)
+LWMA_MAX_STEP_UP = (3, 2)          # next work <= 1.5x previous
+LWMA_MAX_STEP_DOWN = (2, 3)        # next work >= 2/3 previous
+LWMA_MAX_SOLVETIME_FACTOR = 6      # one solve time counts as at most 6 targets
+MTP_WINDOW = 11                    # median-time-past window (after the fork)
+STALL_SECONDS = 10 * LWMA_TARGET_BLOCK_TIME  # a block this late may use emergency work
+STALL_WORK_DIVISOR = 8
+POW_LIMIT = 2 ** 256
+
+# ---- Security fork (same height as LWMA; every node must upgrade before it) ----
+# From SECURITY_FORK_HEIGHT: reorg depth limit, checkpoints, stricter stall rule,
+# anti-farming v2 for points. See docs/THREAT_MODEL.md and docs/CONFIRMATIONS.md.
+SECURITY_FORK_HEIGHT = 5000
+MAX_REORG_DEPTH = 720              # node policy from 5000: never roll back more than this (~12 h at 60 s; Aric 2026-10-23)
+# {"height": "hash"}; shipped with the release (may be empty). Resolved next to
+# this file so it works whatever the node's working directory (desktop app).
+CHECKPOINTS_FILE = os.environ.get(
+    "NETLITHIC_CHECKPOINTS_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "checkpoints.json"),
+)
+
+
+def is_security_fork(index: int) -> bool:
+    return int(index) >= SECURITY_FORK_HEIGHT
+
+
+class CheckpointError(ValueError):
+    """config/checkpoints.json exists but is unreadable or malformed."""
+
+
+def load_checkpoints(path: str = None) -> Dict[int, str]:
+    """Read {"height": "hash"} checkpoints. A missing file means "no
+    checkpoints". A file that exists but can't be parsed is an operator error
+    and raises CheckpointError (review F4): silently running with no
+    checkpoints would hide a broken or tampered file."""
+    path = path or CHECKPOINTS_FILE
+    if not os.path.exists(path):
+        # Review R4: warn, don't fail. The file ships with every release, so
+        # a missing one means a damaged/partial install; refusing to start
+        # would take nodes offline over a file that is currently empty
+        # anyway. Revisit (fail hard) once signed checkpoints exist.
+        log.warning("Checkpoint file %s is MISSING: running with NO checkpoints. "
+                    "Reinstall the release or restore config/checkpoints.json.", path)
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            raise ValueError("top level must be an object")
+        out = {}
+        for k, v in raw.items():
+            if str(k).startswith("_"):
+                continue  # comment keys like "_readme"
+            h = str(v)
+            if not re.fullmatch(r"[0-9a-f]{64}", h):
+                raise ValueError(f"checkpoint {k}: not a 64-hex block hash")
+            out[int(k)] = h
+        return out
+    except (OSError, ValueError, TypeError) as e:
+        log.error("Checkpoint file %s is invalid: %s", path, e)
+        raise CheckpointError(f"invalid checkpoint file {path}: {e}") from e
+
 log = logging.getLogger("netlithic.core")
+
+_checkpoint_cache: Optional[Dict[int, str]] = None
+
+
+def init_checkpoints(path: str = None) -> Dict[int, str]:
+    """Load checkpoints once (node startup) and cache them (review R5).
+    Raises CheckpointError on a malformed file, so the node won't start."""
+    global _checkpoint_cache
+    _checkpoint_cache = load_checkpoints(path)
+    return _checkpoint_cache
+
+
+def get_checkpoints() -> Dict[int, str]:
+    """Cached checkpoints; loaded on first use if init_checkpoints() wasn't called."""
+    if _checkpoint_cache is None:
+        return init_checkpoints()
+    return _checkpoint_cache
+
+
+def reset_checkpoints() -> None:
+    global _checkpoint_cache
+    _checkpoint_cache = None
 
 ADDRESS_RE = re.compile(r"^[0-9a-f]{32}$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -240,6 +335,8 @@ def normalize_payout_tx(tx: dict) -> dict:
 
 
 def normalize_tx(tx: dict) -> dict:
+    if pause.is_pause_tx(tx):
+        return pause.normalize_pause_tx(tx)
     if is_reward_tx(tx):
         return normalize_reward_tx(tx)
     if is_payout_tx(tx):
@@ -294,6 +391,63 @@ class Block:
         )
 
 
+def is_post_fork(index: int) -> bool:
+    return int(index) >= LWMA_FORK_HEIGHT
+
+
+def meets_pow(block_hash: str, difficulty: int, index: int) -> bool:
+    if not is_post_fork(index):
+        return block_hash.startswith("0" * int(difficulty))
+    work = int(difficulty)
+    return work >= 1 and int(block_hash, 16) * work < POW_LIMIT
+
+
+def block_work(block: "Block") -> int:
+    """Expected hashes for a block (old blocks: 16 per leading hex zero)."""
+    if is_post_fork(block.index):
+        return int(block.difficulty)
+    return 16 ** int(block.difficulty)
+
+
+def median_time_past(chain: List["Block"], window: int = MTP_WINDOW) -> float:
+    ts = sorted(b.timestamp for b in chain[-window:])
+    return ts[len(ts) // 2]
+
+
+def lwma_next_work(chain: List["Block"]) -> int:
+    """LWMA work for the block after chain[-1], using only post-fork blocks.
+    Timestamps are viewed monotonically (each at least 1s after the one before)
+    and each solve time is capped, so one lying timestamp moves work only a little."""
+    T = LWMA_TARGET_BLOCK_TIME
+    last = chain[-1]
+    if not is_post_fork(last.index):
+        return max(LWMA_MIN_WORK, block_work(last))  # first post-fork block: same work as before
+    post = [b for b in chain[-LWMA_WINDOW:] if is_post_fork(b.index)]
+    start = chain[len(chain) - len(post) - 1] if len(chain) > len(post) else None
+    blocks = ([start] if start is not None else []) + post
+    if len(blocks) < 2:
+        return max(LWMA_MIN_WORK, int(last.difficulty))
+    weighted = 0
+    sum_work = 0
+    prev_t = blocks[0].timestamp
+    for i, b in enumerate(blocks[1:], start=1):
+        t = max(b.timestamp, prev_t + 1)
+        st = min(t - prev_t, LWMA_MAX_SOLVETIME_FACTOR * T)
+        prev_t = t
+        weighted += st * i
+        sum_work += block_work(b)
+    n = len(blocks) - 1
+    nxt = int(sum_work * T * (n + 1) / (2 * weighted)) if weighted > 0 else block_work(last)
+    prev_work = block_work(last)
+    hi = prev_work * LWMA_MAX_STEP_UP[0] // LWMA_MAX_STEP_UP[1]
+    lo = prev_work * LWMA_MAX_STEP_DOWN[0] // LWMA_MAX_STEP_DOWN[1]
+    return max(LWMA_MIN_WORK, min(hi, max(lo, nxt)))
+
+
+def stall_work(normal_work: int) -> int:
+    return max(LWMA_MIN_WORK, normal_work // STALL_WORK_DIVISOR)
+
+
 class Blockchain:
     def __init__(self, econ: Optional["economics.Economics"] = None):
         self.chain: List[Block] = []
@@ -328,7 +482,15 @@ class Blockchain:
         chain = self.chain if chain is None else chain
         return contributions.points_from_blocks(
             (block.to_dict() for block in chain), self.econ.points_per_block, self.econ.points_per_tx,
-            self.econ.min_point_transfer, self.econ.point_pair_cap, self.econ.epoch_blocks)
+            self.econ.min_point_transfer, self.econ.point_pair_cap, self.econ.epoch_blocks,
+            epoch_fn=self.econ.epoch_id, rules_height=SECURITY_FORK_HEIGHT,
+            first_seen=contributions.first_seen_heights(b.to_dict() for b in self.chain))
+
+    def contribution_points_this_epoch(self) -> Dict[str, Dict[str, int]]:
+        """Points earned so far in the current (not yet paid) epoch."""
+        cur = self.econ.epoch_id(len(self.chain))
+        window = [b for b in self.chain if self.econ.epoch_id(b.index) == cur]
+        return self.contribution_points(window)
 
     def save_contributions_cache(self) -> None:
         try:
@@ -458,7 +620,31 @@ class Blockchain:
         return difficulty
 
     def expected_block_difficulty(self, previous_chain: List[Block]) -> int:
+        if is_post_fork(previous_chain[-1].index + 1):
+            return lwma_next_work(previous_chain)
         return self.calculate_next_difficulty(previous_chain)
+
+    def allowed_difficulties(self, previous_chain: List[Block], timestamp: float) -> List[int]:
+        """Work values a new block may carry. After the fork, a block arriving
+        STALL_SECONDS or more after the previous one may use a reduced
+        "emergency" work so a hashrate drop can't freeze the chain."""
+        normal = self.expected_block_difficulty(previous_chain)
+        height = previous_chain[-1].index + 1
+        if not is_post_fork(height):
+            return [normal]
+        if is_security_fork(height):
+            # Measure the gap from the LATEST recent timestamp (not just the
+            # previous block, which a miner can backdate). This is a pure
+            # function of chain data: no wall-clock read here, so every node
+            # reaches the same verdict whenever it validates (review F2).
+            # Future-dated timestamps are bounded at block acceptance
+            # (MAX_FUTURE_BLOCK_SECONDS drift bound in block_reject_reason,
+            # applied when a block is received or mined, not here).
+            newest = max(b.timestamp for b in previous_chain[-MTP_WINDOW:])
+            stalled = timestamp - newest >= STALL_SECONDS
+        else:
+            stalled = timestamp - previous_chain[-1].timestamp >= STALL_SECONDS
+        return [normal, stall_work(normal)] if stalled else [normal]
 
     # ----------------------------
     # Chain Views
@@ -470,7 +656,7 @@ class Blockchain:
     def chain_work(self, chain: Optional[List[Block]] = None) -> int:
         if chain is None:
             chain = self.chain
-        return sum(2 ** block.difficulty for block in chain)
+        return sum(block_work(block) for block in chain)
 
     # ----------------------------
     # Transactions / State
@@ -484,7 +670,7 @@ class Blockchain:
 
         for block in chain:
             for tx in block.transactions:
-                if is_params_tx(tx):
+                if is_params_tx(tx) or pause.is_pause_tx(tx):
                     continue
                 if is_reward_tx(tx) or is_allocation_tx(tx):
                     recipient = normalize_address(tx["recipient"])
@@ -567,10 +753,15 @@ class Blockchain:
         e = self.econ
         if not e.is_epoch_block(height):
             return []
-        window = [b for b in prior_chain if height - e.epoch_blocks <= b.index < height]
+        if is_security_fork(height) and pause.state(prior_chain, height)["paused"]:
+            return []  # payouts paused (public, on-chain); the pool keeps the coins
+        start = height - e.epoch_length_at(height)
+        window = [b for b in prior_chain if start <= b.index < height]
         points = contributions.points_from_blocks(
             (b.to_dict() for b in window), e.points_per_block, e.points_per_tx,
-            e.min_point_transfer, e.point_pair_cap, e.epoch_blocks)
+            e.min_point_transfer, e.point_pair_cap, e.epoch_blocks, epoch_fn=e.epoch_id,
+            rules_height=SECURITY_FORK_HEIGHT,
+            first_seen=contributions.first_seen_heights(b.to_dict() for b in prior_chain))
         cp = {a: u["cp_tenths"] for a, u in points.items()
               if a not in e.locked_addresses and u["cp_tenths"] > 0}
         total_cp = sum(cp.values())
@@ -583,13 +774,45 @@ class Blockchain:
             if amount > 0:
                 payouts.append({
                     "type": "payout",
-                    "epoch": height // e.epoch_blocks,
+                    "epoch": e.epoch_id(height),
                     "recipient": addr,
                     "amount": amount,
                     "vest_start": height,
-                    "vest_end": height + e.vesting_blocks,
+                    "vest_end": height + e.vesting_blocks_at(height),
                 })
         return payouts
+
+    def payout_account(self, address: str) -> dict:
+        """Community payouts for one address, all computed from the chain:
+        earned = every payout received; vesting = the part not yet unlocked;
+        claimable = the vested part (already spendable, no claim step needed)."""
+        address = normalize_address(address)
+        height = len(self.chain)
+        earned = vesting = 0
+        history = []
+        for b in self.chain:
+            for tx in b.transactions:
+                if is_payout_tx(tx) and tx["recipient"] == address:
+                    left = self.unvested(tx, height)
+                    earned += int(tx["amount"])
+                    vesting += left
+                    history.append({"epoch": int(tx["epoch"]), "height": b.index,
+                                    "amount": economics.to_nlt(int(tx["amount"])),
+                                    "vests_fully_at": int(tx["vest_end"]),
+                                    "still_vesting": economics.to_nlt(left)})
+        cur = self.contribution_points_this_epoch().get(address, {})
+        nxt = self.econ.next_epoch_height(height - 1)
+        return {
+            "address": address,
+            "earned_nlt": economics.to_nlt(earned),
+            "vesting_nlt": economics.to_nlt(vesting),
+            "claimable_nlt": economics.to_nlt(earned - vesting),
+            "points_this_epoch": economics.format_points(cur.get("cp_tenths", 0)),
+            "next_payout_height": nxt,
+            "blocks_until_next_payout": nxt - (height - 1),
+            "payouts": history[-50:],
+            "note": "Test coins have no value. Vested payouts are already in your spendable balance.",
+        }
 
     def account_info(self, address: str) -> dict:
         address = normalize_address(address)
@@ -624,13 +847,16 @@ class Blockchain:
         e = self.econ
         nxt = e.next_epoch_height(len(self.chain) - 1)
         preview = self.expected_payouts(self.chain, nxt) if nxt == len(self.chain) else None
+        se = e.short_epoch()
         return {
-            "epoch_blocks": e.epoch_blocks,
+            "epoch_blocks": e.epoch_length_at(len(self.chain)),
+            "current_epoch": e.epoch_id(len(self.chain)),
+            "testnet_short_epoch": None if not se else {"from_height": se[0], "epoch_blocks": se[1]},
             "next_epoch_height": nxt,
             "blocks_until": nxt - (len(self.chain) - 1),
             "pool_available_at_next_epoch": economics.to_nlt(self.community_pool_available(self.chain, nxt)),
             "per_address_cap": economics.to_nlt(e.payout_cap),
-            "vesting_blocks": e.vesting_blocks,
+            "vesting_blocks": e.vesting_blocks_at(nxt),
             "next_block_payouts": None if preview is None else [
                 {"recipient": p["recipient"], "amount": economics.to_nlt(p["amount"])} for p in preview],
             "treasury_reserve_spend_approval": e.spend_approval,
@@ -833,6 +1059,18 @@ class Blockchain:
             if got != expected:
                 return False
             rest = block.transactions[1 + k:]
+            p = 0
+            while p < len(rest) and pause.is_pause_tx(rest[p]):
+                p += 1
+            if p:
+                if not is_security_fork(block.index):
+                    return False
+                nonce = pause.state(prior_chain)["nonce"]
+                for t in rest[:p]:
+                    nonce += 1
+                    if not pause.valid_pause_tx(t, nonce, self.econ.chain_id):
+                        return False
+                rest = rest[p:]
             m = 0
             while m < len(rest) and is_multisig_tx(rest[m]):
                 m += 1
@@ -906,6 +1144,13 @@ class Blockchain:
             if is_reward_tx(tx):
                 return False
 
+            if pause.is_pause_tx(tx):
+                if not is_security_fork(len(self.chain)):
+                    return False
+                if any(pause.is_pause_tx(t) for t in mempool):
+                    return False  # one pending pause action at a time
+                return pause.valid_pause_tx(tx, pause.state(self.chain)["nonce"] + 1, self.econ.chain_id)
+
             if is_multisig_tx(tx):
                 tx = normalize_multisig_tx(tx)
                 bucket = tx["payload"]["bucket"]
@@ -968,6 +1213,14 @@ class Blockchain:
         temp_balances[miner_address] = temp_balances.get(miner_address, 0) + block_reward
         temp_nonces: Dict[str, int] = {}
 
+        pause_txs: List[dict] = []
+        if is_security_fork(next_index):
+            pnonce = pause.state(self.chain)["nonce"]
+            for tx in mempool:
+                if pause.is_pause_tx(tx) and pause.valid_pause_tx(tx, pnonce + 1, self.econ.chain_id):
+                    pause_txs.append(pause.normalize_pause_tx(tx))
+                    pnonce += 1
+
         multisig_txs: List[dict] = []
         ms_nonces = {b: self.multisig_confirmed_nonce(b, self.chain) for b in ("treasury", "reserve")}
         candidates = []
@@ -1016,12 +1269,16 @@ class Blockchain:
         total_fees = sum(int(t["payload"]["fee"]) for t in valid_txs)
         reward_tx = make_reward_tx(miner_address, block_reward, total_fees)
 
-        transactions = [reward_tx] + payouts + multisig_txs + valid_txs
+        transactions = [reward_tx] + payouts + pause_txs + multisig_txs + valid_txs
         previous_hash = latest.hash
         nonce = 0
 
+        post_fork = is_post_fork(next_index)
+        min_ts = median_time_past(self.chain) if post_fork else latest.timestamp
         while True:
-            timestamp = time.time()
+            timestamp = max(time.time(), min_ts + 0.001)
+            if post_fork:
+                difficulty = self.allowed_difficulties(self.chain, timestamp)[-1]
             block_hash = self.calculate_hash(
                 index=next_index,
                 timestamp=timestamp,
@@ -1031,7 +1288,7 @@ class Blockchain:
                 difficulty=difficulty,
             )
 
-            if block_hash.startswith("0" * difficulty):
+            if meets_pow(block_hash, difficulty, next_index):
                 return Block(
                     index=next_index,
                     timestamp=timestamp,
@@ -1070,11 +1327,15 @@ class Blockchain:
             if new_block.previous_hash != previous_block.hash:
                 return "previous_hash does not match our latest block"
 
-            expected_difficulty = self.expected_block_difficulty(prior_chain + [previous_block])
-            if new_block.difficulty != expected_difficulty:
-                return f"wrong difficulty {new_block.difficulty}, expected {expected_difficulty}"
+            history = prior_chain + [previous_block]
+            allowed = self.allowed_difficulties(history, new_block.timestamp)
+            if new_block.difficulty not in allowed:
+                return f"wrong difficulty {new_block.difficulty}, expected {allowed[0]}"
 
-            if new_block.timestamp <= previous_block.timestamp:
+            if is_post_fork(new_block.index):
+                if new_block.timestamp <= median_time_past(history):
+                    return f"timestamp not after median of last {MTP_WINDOW} blocks"
+            elif new_block.timestamp <= previous_block.timestamp:
                 return "timestamp not after previous block"
 
             if new_block.timestamp > time.time() + MAX_FUTURE_BLOCK_SECONDS:
@@ -1092,7 +1353,7 @@ class Blockchain:
             if new_block.hash != recalculated_hash:
                 return "hash does not match block contents"
 
-            if not new_block.hash.startswith("0" * new_block.difficulty):
+            if not meets_pow(new_block.hash, new_block.difficulty, new_block.index):
                 return "insufficient proof of work"
 
             if not self.validate_block_transactions(prior_chain + [previous_block], new_block):
@@ -1112,6 +1373,11 @@ class Blockchain:
             if blocks[0].to_dict() != local_genesis:
                 log.warning("Rejected chain: genesis does not match config/genesis_config.json")
                 return False
+
+            for h, cp_hash in get_checkpoints().items():
+                if h < len(blocks) and blocks[h].hash != cp_hash:
+                    log.warning("Rejected chain: block %s does not match checkpoint", h)
+                    return False
 
             temp_chain = [blocks[0]]
 
@@ -1143,6 +1409,8 @@ class Blockchain:
             prior_chain = self.chain[:-1]
 
             reason = self.block_reject_reason(new_block, previous_block, prior_chain)
+            if not reason:
+                reason = self.receive_time_reason(new_block, prior_chain + [previous_block])
             if reason:
                 self.last_reject_reason = reason
                 log.warning("Rejected block %s: %s", block_data.get("index"), reason)
@@ -1157,7 +1425,55 @@ class Blockchain:
             log.warning("Rejected block: %s", self.last_reject_reason)
             return False
 
+    def receive_time_reason(self, new_block: "Block", history: List["Block"], now: float = None) -> Optional[str]:
+        """Clock policy at the RECEIVE path only (review F2), never inside
+        is_valid_chain: a block claiming the stall rule's emergency (1/8) work
+        must not be timestamped in our future, so a miner can't pull the stall
+        forward with a future timestamp. A node that refuses it here still
+        accepts the same block later via normal sync once it is no longer in
+        the future, so nodes can't permanently disagree on validity."""
+        if not is_security_fork(new_block.index) or len(history) < 1:
+            return None
+        now = time.time() if now is None else now
+        allowed = self.allowed_difficulties(history, new_block.timestamp)
+        emergency = len(allowed) == 2 and new_block.difficulty == allowed[1] and allowed[0] != allowed[1]
+        if emergency and new_block.timestamp > now:
+            return "emergency-work block timestamped in the future (receive policy)"
+        return None
+
+    def reorg_depth(self, incoming: List[Block]) -> int:
+        """How many of OUR blocks would be dropped by switching to `incoming`."""
+        n = min(len(self.chain), len(incoming))
+        common = 0
+        while common < n and self.chain[common].hash == incoming[common].hash:
+            common += 1
+        return len(self.chain) - common
+
+    def reorg_depth_raw(self, chain_data: List[dict]) -> int:
+        """reorg_depth() from raw block dicts, using only their claimed
+        hashes (cheap; no parsing or validation)."""
+        n = min(len(self.chain), len(chain_data))
+        common = 0
+        while common < n and isinstance(chain_data[common], dict) \
+                and self.chain[common].hash == chain_data[common].get("hash"):
+            common += 1
+        return len(self.chain) - common
+
     def replace_chain(self, chain_data: List[dict]) -> bool:
+        # Cheap checks FIRST (review F4): refuse a too-deep reorg before
+        # spending CPU on full validation of the incoming chain. A lying
+        # "hash" field can only make depth look larger (refuse) or match our
+        # own blocks, which full validation re-checks below.
+        if not isinstance(chain_data, list) or not chain_data:
+            return False
+        if is_security_fork(self.chain[-1].index):
+            depth = self.reorg_depth_raw(chain_data)
+            if depth > MAX_REORG_DEPTH:
+                self.last_reject_reason = f"reorg of {depth} blocks exceeds limit {MAX_REORG_DEPTH}"
+                log.warning("Rejected chain: %s (peer advertises a chain we refuse; see docs/ECLIPSE_RECOVERY.md)",
+                            self.last_reject_reason)
+                return False
+
         if not self.is_valid_chain(chain_data):
             return False
 
@@ -1166,6 +1482,12 @@ class Blockchain:
         incoming_work = self.chain_work(incoming_chain)
 
         if incoming_work <= current_work:
+            return False
+
+        depth = self.reorg_depth(incoming_chain)
+        if is_security_fork(self.chain[-1].index) and depth > MAX_REORG_DEPTH:
+            self.last_reject_reason = f"reorg of {depth} blocks exceeds limit {MAX_REORG_DEPTH}"
+            log.warning("Rejected chain: %s", self.last_reject_reason)
             return False
 
         self.chain = incoming_chain

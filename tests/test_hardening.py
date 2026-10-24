@@ -138,6 +138,11 @@ def test_loaded_peers_file_is_validated_and_capped(tmp_path, monkeypatch):
     (tmp_path / "peers.json").write_text(json.dumps(
         ["ftp://bad", "http://10.0.0.1:1"] + [f"http://10.1.0.{i}:1" for i in range(100)]))
     import p2p_http
+    monkeypatch.delenv("NETLITHIC_ALLOW_PRIVATE_PEERS", raising=False)
+    p = importlib.reload(p2p_http)
+    p._load_peers()
+    assert p.peers == set()  # R1: private addresses refused from peers.json too
+    monkeypatch.setenv("NETLITHIC_ALLOW_PRIVATE_PEERS", "1")
     p = importlib.reload(p2p_http)
     p._load_peers()
     assert "ftp://bad" not in p.peers

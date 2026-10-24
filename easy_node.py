@@ -18,6 +18,7 @@ import argparse
 import http.client
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -35,8 +36,14 @@ WAIT_SECONDS = 45             # how long install waits for the node to answer on
 STARTUP_FILE = "Netlithic Node.cmd"   # Windows no-admin fallback: lives in the per-user Startup folder
 DENIED_WORDS = ("access is denied", "access denied", "permission denied", "0x80070005",
                 "requested operation requires elevation")
+STOP_WAIT_SECONDS = 10               # uninstall: how long to wait for the stopped node to let go of its files
+RMTREE_ATTEMPTS = 6                  # uninstall: tries at deleting the private Python environment ...
+RMTREE_DELAY = 2                     # ... with this many seconds between tries (about 10 s in all)
 CREATE_NO_WINDOW = 0x08000000        # Windows process-creation flags (numbers, so tests run on Linux)
 CREATE_NEW_PROCESS_GROUP = 0x00000200
+
+
+_sleep = time.sleep    # one name for every wait, so tests can run without really waiting
 
 
 class InstallError(Exception):
@@ -182,19 +189,21 @@ def ps_quote(s):
     return "'" + "".join(ch * 2 if ch in "'\u2018\u2019\u201a\u201b" else ch for ch in s) + "'"
 
 
-def stop_node_command(data_dir):
+def stop_node_command(data_dir, venv_dir=None):
     """PowerShell command that stops any Python process running THIS install's node (matched by its data
-    folder in the command line; this installer's own process is skipped). Prints the ids it stopped."""
+    folder, or by its private Python environment folder, in the command line; this installer's own process
+    is skipped). Prints the ids it stopped."""
+    where = " -or ".join(f"$_.CommandLine.IndexOf({ps_quote(d)}, [StringComparison]::OrdinalIgnoreCase) -ge 0"
+                         for d in (data_dir, venv_dir) if d)
     ps = ("Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -and "
-          f"$_.ProcessId -ne {os.getpid()} -and "
-          f"$_.CommandLine.IndexOf({ps_quote(data_dir)}, [StringComparison]::OrdinalIgnoreCase) -ge 0 }} | "
+          f"$_.ProcessId -ne {os.getpid()} -and ({where}) }} | "
           "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; $_.ProcessId }")
     return ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps]
 
 
 def stop_running_node(p):
     """Best effort: stop an already-running node of this install. Returns (worked, plain-words note)."""
-    rc, out = run_cmd(stop_node_command(p["data"]))
+    rc, out = run_cmd(stop_node_command(p["data"], p.get("venv")))
     if rc != 0:
         return False, out or f"exit code {rc}"
     return True, (f"stopped process {out.split()[0]}" if out.split() else "nothing was running")
@@ -397,6 +406,66 @@ def install(args):
     return p
 
 
+def wait_for_node_to_stop(port, seconds=STOP_WAIT_SECONDS):
+    """Poll once a second until nothing answers on /status any more. True if it went quiet."""
+    for _ in range(int(seconds)):
+        if not node_answers(port):
+            return True
+        _sleep(1)
+    return not node_answers(port)
+
+
+def _unlock_and_retry(func, path, _exc):
+    """rmtree error handler: clear a read-only flag and try the same step once more.
+    If it fails again the error goes up to remove_tree, which retries the whole delete after a pause."""
+    if not os.path.lexists(path):
+        return
+    try:
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+    except OSError:
+        pass
+    func(path)
+
+
+def _is_inside(inner, outer):
+    try:
+        a, b = os.path.abspath(inner), os.path.abspath(outer)
+        return os.path.commonpath([a, b]) == b
+    except ValueError:
+        return False
+
+
+def remove_tree(path, attempts=RMTREE_ATTEMPTS, delay=RMTREE_DELAY):
+    """Delete a folder, riding out files that are still locked for a moment (a node that was just stopped).
+    Never raises a raw error: after the last try it raises InstallError in plain words."""
+    kw = {"onexc": _unlock_and_retry} if sys.version_info >= (3, 12) else {"onerror": _unlock_and_retry}
+    err = None
+    for i in range(max(1, attempts)):
+        try:
+            shutil.rmtree(path, **kw)
+            return
+        except FileNotFoundError:
+            if not os.path.lexists(path):
+                return
+            err = "a file vanished while deleting"
+        except OSError as e:
+            err = e
+        if i + 1 < attempts:
+            _sleep(delay)
+    raise InstallError(
+        f"I could not delete the private Python environment folder:\n  {path}\n  problem: {err}\n"
+        "The node may still be running. Close it (Task Manager, 'pythonw.exe'), or log out and back in, "
+        "then run 'python easy_node.py uninstall' again.\nYour data folder was not touched.")
+
+
+def _safe_remove(path, problems):
+    try:
+        if path and os.path.lexists(path):
+            os.remove(path)
+    except OSError as e:
+        problems.append(InstallError(f"I could not delete the file {path} ({e}). Delete it yourself."))
+
+
 def uninstall(args):
     p = plan(args)
     if not args.dry_run:
@@ -418,23 +487,34 @@ def uninstall(args):
                 problems.append(InstallError(f"I could not remove your Startup-folder file {p['startup_path']} ({e}), "
                                              "so your node may still start at login. Delete that file yourself."))
             worked, note = stop_running_node(p)
-            if node_answers(args.port):
-                problems.append(InstallError(
-                    f"Your node is still running and answering at http://127.0.0.1:{args.port}/status "
-                    f"({'could not stop it: ' + note if not worked else note}). Close 'pythonw.exe' in Task Manager, "
-                    "or restart your PC, then run uninstall again."))
+            if worked and note.startswith("stopped"):
+                _sleep(1)                                      # let Windows release the stopped node's files
+        else:
+            worked, note = True, ""
+        if not wait_for_node_to_stop(args.port):
+            why = f"could not stop it: {note}" if not worked else "it did not stop"
+            problems.append(InstallError(
+                f"Your node is still running and answering at http://127.0.0.1:{args.port}/status ({why}). "
+                "Close 'pythonw.exe' in Task Manager, or restart your PC, then run uninstall again."))
         if problems:
             raise InstallError("\n\n".join(str(x) for x in problems))
         for f in (p["service_path"], p["launcher_path"]):
-            if f and os.path.exists(f):
-                os.remove(f)
+            _safe_remove(f, problems)
         if p["platform"] == "windows":
             for d in fallback_dirs(p["home"]):
                 for f in (os.path.join(d, LAUNCHER), os.path.join(short_path(d), LAUNCHER)):
-                    if os.path.exists(f):
-                        os.remove(f)
+                    _safe_remove(f, problems)
         if not args.keep_venv and os.path.isdir(p["venv"]):
-            shutil.rmtree(p["venv"])
+            if _is_inside(p["data"], p["venv"]) or _is_inside(p["venv"], p["data"]):
+                problems.append(InstallError(f"I will not delete {p['venv']} because it overlaps your data folder "
+                                             f"{p['data']}."))
+            else:
+                try:
+                    remove_tree(p["venv"])
+                except InstallError as e:
+                    problems.append(e)
+        if problems:
+            raise InstallError("\n\n".join(str(x) for x in problems))
     say(f"Service removed. Data kept in {p['data']} (delete it yourself if you want).")
     return p
 
@@ -460,8 +540,18 @@ def main(argv=None):
     try:
         return install(a) if a.action == "install" else uninstall(a)
     except InstallError as e:
-        print(f"\nERROR: {e}\n\nYour node was NOT started. Fix the problem above and run the installer again.",
-              file=sys.stderr, flush=True)
+        if a.action == "uninstall":
+            tail = ("Uninstall did not finish. Your data folder was not touched. Fix the problem above and run "
+                    "'python easy_node.py uninstall' again.")
+        else:
+            tail = "Your node was NOT started. Fix the problem above and run the installer again."
+        print(f"\nERROR: {e}\n\n{tail}", file=sys.stderr, flush=True)
+        sys.exit(1)
+    except Exception as e:          # never show a raw traceback to a non-technical person
+        what = "uninstall" if a.action == "uninstall" else "install"
+        print(f"\nERROR: something unexpected went wrong during {what}: {type(e).__name__}: {e}\n\n"
+              f"Your data folder was not touched. Send this message to the Netlithic team, then try again "
+              f"(if it mentions a file, make sure the node is closed first).", file=sys.stderr, flush=True)
         sys.exit(1)
 
 

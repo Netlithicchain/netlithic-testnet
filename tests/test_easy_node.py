@@ -133,6 +133,7 @@ def win(tmp_path, monkeypatch):
     monkeypatch.setattr(en, "short_path", lambda p: p, raising=False)
     monkeypatch.setattr(en, "node_answers", lambda port: False, raising=False)
     monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setattr(en, "_sleep", lambda s: None, raising=False)    # never really wait in tests
     started = []                                      # every detached start (nothing real is ever started)
     monkeypatch.setattr(en.subprocess, "Popen", lambda cmd, *a, **k: started.append((list(cmd), k)), raising=False)
     args = ["install", "--platform", "windows", "--home", str(home), "--base-dir", str(base), "--no-venv"]
@@ -519,3 +520,170 @@ def test_docs_and_installer_mention_both_methods():
     doc = open(os.path.join(root, "docs", "EASY_NODE.md"), encoding="utf-8").read()
     assert "Startup folder" in doc and "No admin" in doc
     assert "Startup" in open(os.path.join(root, "install.ps1"), encoding="utf-8").read()
+
+
+# ---------------------------------------------------------------------------
+# Uninstall hardening. Real bug (Aric's PC): `uninstall` crashed with a raw traceback, PermissionError
+# [WinError 5] on venv\Lib\site-packages\cryptography\hazmat\bindings\_rust.pyd, because the node (pythonw from
+# that venv) was still running and holding the file open.
+# ---------------------------------------------------------------------------
+import shutil as _shutil
+
+
+@pytest.fixture
+def venv_win(win, monkeypatch):
+    """Like `win`, but with a real (fake-content) venv folder and a data folder holding a pretend wallet."""
+    win.sleeps = []
+    monkeypatch.setattr(en, "_sleep", lambda s: win.sleeps.append(s), raising=False)
+    monkeypatch.setattr(en.time, "sleep", lambda s: win.sleeps.append(s))   # old code: never really wait
+    venv = win.base / "venv" / "Lib" / "site-packages" / "cryptography"
+    venv.mkdir(parents=True)
+    (venv / "_rust.pyd").write_text("locked on Windows while the node runs")
+    data = win.base / "node"
+    data.mkdir(parents=True, exist_ok=True)
+    (data / "chain.json").write_text("chain")
+    (data / "wallet.json").write_text("pretend wallet - must survive uninstall")
+    win.venv, win.data = win.base / "venv", data
+    win.uargs = ["uninstall", "--platform", "windows", "--home", str(win.home), "--base-dir", str(win.base)]
+    return win
+
+
+def _data_intact(w):
+    return (w.data / "chain.json").read_text() == "chain" and \
+        (w.data / "wallet.json").read_text() == "pretend wallet - must survive uninstall"
+
+
+def _flaky_rmtree(monkeypatch, fail_times, log=None):
+    real = _shutil.rmtree
+    state = {"n": 0}
+
+    def fake(path, *a, **k):
+        state["n"] += 1
+        if log is not None:
+            log.append(("rmtree", str(path)))
+        if state["n"] <= fail_times:
+            raise PermissionError(5, "Access is denied", str(path) + "\\_rust.pyd")
+        return real(path, *a, **k)
+    monkeypatch.setattr(en.shutil, "rmtree", fake)
+    return state
+
+
+def test_uninstall_venv_locked_a_few_times_then_succeeds(venv_win, capsys, monkeypatch):
+    st = _flaky_rmtree(monkeypatch, 3)
+    en.main(venv_win.uargs)
+    assert st["n"] == 4 and not venv_win.venv.exists()
+    assert "Service removed" in capsys.readouterr().out
+    assert _data_intact(venv_win)
+
+
+def test_uninstall_venv_always_locked_is_plain_words_not_a_traceback(venv_win, capsys, monkeypatch):
+    _flaky_rmtree(monkeypatch, 10 ** 6)
+    with pytest.raises(SystemExit) as e:
+        en.main(venv_win.uargs)
+    assert e.value.code not in (0, None)
+    out = capsys.readouterr()
+    text = out.out + out.err
+    assert "Traceback" not in text and "PermissionError" not in text.split("problem:")[0]
+    assert "Service removed" not in text and "Removed" not in text
+    assert str(venv_win.venv) in text and "may still be running" in text and "uninstall" in text
+    assert "log out" in text
+    assert venv_win.venv.exists() and _data_intact(venv_win)
+    assert "NOT started" not in text                       # that wording is for install, not uninstall
+
+
+def test_uninstall_stops_node_before_deleting_venv(venv_win, monkeypatch):
+    events = []
+    real = en.run_cmd
+    monkeypatch.setattr(en, "run_cmd", lambda c: (events.append(("stop" if c[0] == "powershell" else c[0], 0)), real(c))[1])
+    _flaky_rmtree(monkeypatch, 0, log=events)
+    en.main(venv_win.uargs)
+    kinds = [k for k, _ in events]
+    assert "stop" in kinds and "rmtree" in kinds
+    assert kinds.index("stop") < kinds.index("rmtree")
+    assert kinds.index("schtasks") < kinds.index("rmtree")
+    stop_cmd = [c for c in venv_win.fake.calls if c[0] == "powershell"][0][-1]
+    assert str(venv_win.venv).replace("'", "''") in stop_cmd and str(venv_win.data) in stop_cmd   # matches venv AND data folder
+
+
+def test_uninstall_waits_for_node_to_go_quiet_before_deleting(venv_win, monkeypatch):
+    answers = iter([True, True, True, False] + [False] * 20)
+    monkeypatch.setattr(en, "node_answers", lambda port: next(answers))
+    log = []
+    _flaky_rmtree(monkeypatch, 0, log=log)
+    en.main(venv_win.uargs)
+    assert len(venv_win.sleeps) >= 3 and not venv_win.venv.exists()
+    assert log                                              # deleted only after it went quiet
+
+
+def test_uninstall_node_never_quiet_stops_without_deleting(venv_win, capsys, monkeypatch):
+    monkeypatch.setattr(en, "node_answers", lambda port: True)
+    log = []
+    _flaky_rmtree(monkeypatch, 0, log=log)
+    with pytest.raises(SystemExit):
+        en.main(venv_win.uargs)
+    assert log == [] and venv_win.venv.exists() and _data_intact(venv_win)
+    assert "Traceback" not in capsys.readouterr().err
+    assert sum(venv_win.sleeps) <= 15                       # a short, bounded wait
+
+
+def test_rmtree_handler_clears_read_only_flag(tmp_path):
+    f = tmp_path / "ro.pyd"
+    f.write_text("x")
+    os.chmod(f, 0o444)
+    seen = []
+
+    def func(path):
+        if not os.access(path, os.W_OK):
+            raise PermissionError(13, "read-only", path)
+        seen.append(path)
+    en._unlock_and_retry(func, str(f), PermissionError())
+    assert seen == [str(f)]
+    en._unlock_and_retry(func, str(tmp_path / "gone"), FileNotFoundError())   # already gone: quietly fine
+
+
+def test_remove_tree_removes_a_normal_folder_with_read_only_files(tmp_path):
+    d = tmp_path / "v" / "sub"
+    d.mkdir(parents=True)
+    (d / "a.txt").write_text("a")
+    os.chmod(d / "a.txt", 0o444)
+    en.remove_tree(str(tmp_path / "v"), attempts=2, delay=0)
+    assert not (tmp_path / "v").exists()
+
+
+def test_uninstall_other_file_failures_are_plain_words(venv_win, capsys, monkeypatch):
+    en.main(venv_win.args)                                  # install (files only; the venv folder already exists)
+    real_remove = os.remove
+
+    def deny(path, *a, **k):
+        if str(path).endswith("start-node.cmd"):
+            raise PermissionError(13, "Access is denied", str(path))
+        return real_remove(path, *a, **k)
+    monkeypatch.setattr(os, "remove", deny)
+    with pytest.raises(SystemExit) as e:
+        en.main(venv_win.uargs)
+    assert e.value.code not in (0, None)
+    out = capsys.readouterr()
+    assert "Traceback" not in out.out + out.err and "start-node.cmd" in out.err
+    assert "Service removed" not in out.out and _data_intact(venv_win)
+
+
+def test_main_turns_unexpected_oserror_into_plain_error(monkeypatch, capsys):
+    for action in ("install", "uninstall"):
+        monkeypatch.setattr(en, action, lambda a: (_ for _ in ()).throw(PermissionError(13, "Access is denied", "/some/file")))
+        with pytest.raises(SystemExit) as e:
+            en.main([action, "--platform", "windows"])
+        assert e.value.code == 1
+        out = capsys.readouterr()
+        assert "ERROR" in out.err and "Traceback" not in out.err + out.out and "/some/file" in out.err
+
+
+def test_uninstall_refuses_to_delete_venv_that_overlaps_data(tmp_path, monkeypatch, capsys):
+    base = tmp_path / "b"
+    (base / "venv" / "node").mkdir(parents=True)
+    (base / "venv" / "node" / "wallet.json").write_text("w")
+    monkeypatch.setattr(en.subprocess, "run", FakeSchtasks())
+    monkeypatch.setattr(en, "node_answers", lambda p: False)
+    monkeypatch.setattr(en, "plan", lambda a, _p=en.plan: {**_p(a), "data": str(base / "venv" / "node")})
+    with pytest.raises(SystemExit):
+        en.main(["uninstall", "--platform", "windows", "--home", str(tmp_path), "--base-dir", str(base)])
+    assert (base / "venv" / "node" / "wallet.json").exists()

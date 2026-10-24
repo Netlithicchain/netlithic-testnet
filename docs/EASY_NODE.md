@@ -41,7 +41,7 @@ you, change the port line to `"8000:8000"` and set `ADVERTISE_URL` to your publi
 - The node joins 137.184.199.238:8000 and 157.230.63.97:8000.
 
 ## Remove
-`python easy_node.py uninstall` stops and removes the service. Your data folder is kept.
+`python easy_node.py uninstall` stops the node, waits a few seconds for Windows to release its files, then removes the service and the private Python folder. Your data folder is kept and never touched. If a file is still in use it says so in plain words (close the node, or log out and back in, then run uninstall again) and does not claim it finished.
 
 ## Deploy plan (for the team)
 Nothing runs on the servers. Publish = put these files in the public download / repo; the

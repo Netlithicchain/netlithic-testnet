@@ -5,4 +5,4 @@ Problem:
 (b) The back-and-forth rule only catches A<->B, so a ring like A->B->C->A passes (contributions.py:111).
 (c) The 30-per-period cap applies per address, so N pre-aged sybils get 30*N.
 Proposed fix: a minimum transfer value for points; count each unique (sender, receiver) pair once per period; weight points by recipient diversity and graph distance; give no points when the block's miner funded the sender.
-Needs Aric's decision (economics). Review with the first-payout data (block 6440).
+Needs a founder decision (economics). Review with the first-payout data (block 6440).

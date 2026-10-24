@@ -233,7 +233,7 @@ def test_pause_signature_nonce_and_chain_rules(chain, monkeypatch):
     assert chain.validate_candidate_tx_against_chain_and_mempool(good, [])
     assert not chain.validate_candidate_tx_against_chain_and_mempool(good, [good])  # one at a time
     assert not chain.validate_candidate_tx_against_chain_and_mempool(
-        pause.make_pause_tx(other, True, "not aric", 1, cid), [])
+        pause.make_pause_tx(other, True, "not the key holder", 1, cid), [])
     assert not chain.validate_candidate_tx_against_chain_and_mempool(
         pause.make_pause_tx(k, True, "wrong nonce", 2, cid), [])
     assert not chain.validate_candidate_tx_against_chain_and_mempool(

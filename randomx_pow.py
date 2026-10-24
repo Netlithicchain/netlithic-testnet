@@ -1,4 +1,4 @@
-"""PROPOSAL pending Aric -- NOT ACTIVE. RandomX proof-of-work prototype.
+"""PROPOSAL pending founder approval -- NOT ACTIVE. RandomX proof-of-work prototype.
 
 Uses the C library tevador/RandomX through the `RandomX` PyPI binding (or the
 `openssl-encrypt-randomx` binding, module randomx_native). There is NO pure-Python
@@ -7,7 +7,7 @@ RANDOMX_FORK_HEIGHT is None, so consensus never calls this. See docs/RANDOMX_PRO
 """
 import hashlib
 
-RANDOMX_FORK_HEIGHT = None      # proposal: a height chosen by Aric; None = off
+RANDOMX_FORK_HEIGHT = None      # proposal: a height chosen by the founder; None = off
 SEED_EPOCH = 2048               # Monero-style key rotation
 SEED_LAG = 64
 

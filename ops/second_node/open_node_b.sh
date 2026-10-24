@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # OPTION A (free): make node B on the same droplet a second public node.
-# NOT RUN. Review, then run as root on netlithic-testnet-1 only after Aric approves.
+# NOT RUN. Review, then run as root on netlithic-testnet-1 only after the founder approves.
 # Gives a second endpoint (survives node A crashing or a bad restart) but NOT a
 # second machine: a droplet outage takes both down.
 set -euo pipefail

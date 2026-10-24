@@ -98,8 +98,6 @@ by points is not built.
   with `netlithic-dev`.
 - Not built: community votes on spends (governance) and automatic spending reports.
 
-**Founder pay comes from revenue (section 7), not from the treasury.**
-
 - Treasury and reserve are time-locked in code: nothing moves before set dates, and after that only with a passed community vote.
 - Operations and dev fund (part of the 15% treasury):
   - One published address.
@@ -120,12 +118,10 @@ by points is not built.
 - Fair launch: coins are only earned (mining and contribution); no presale.
 - If and when trading starts, the method is chosen by community vote, well after testnet.
 
-## 7. Funding the founder and the project (target about $20k/month)
+## 7. Funding the project
 Revenue first, tokens last.
 - Revenue sources: paid node hosting, developer tools and APIs, support plans, and outside grants (ecosystem and open-source grants).
-- Founder salary: paid in stablecoins or cash from those revenues, not from the treasury. Treasury spending stays off until independent keyholders exist. The amount is publicly disclosed, and once governance exists the community approves it.
-- The founder's own token share (if any) stays on slow vesting, the same as or longer than everyone else's.
-- Why not sell tokens for the salary: about $20k of selling every month is steady pressure on a thin, early market. Buyers can see the founder address selling, which reads like a slow exit and damages trust, the exact pattern Netlithic is meant to avoid. It also ties the founder's income to the token price, which is a bad incentive.
+- The project is not funded by selling tokens. Treasury spending stays off until independent keyholders exist.
 
 ## 8. How builders earn
 - Contribution rewards from the community pool (section 2).
@@ -145,5 +141,4 @@ Revenue first, tokens last.
 - Exact vesting length and per-period caps.
 - How node uptime is attested without being faked.
 - Who the first reviewers are and how they're elected.
-- Founder share: yes or no, and how large.
 - Transition from PoW block rewards to the 20% validator schedule.

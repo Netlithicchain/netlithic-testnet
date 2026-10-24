@@ -40,7 +40,7 @@ def is_empty_self_mined(block: dict) -> bool:
 
 
 # ---- Anti-farming v2 (active from `rules_height`, set by core to SECURITY_FORK_HEIGHT) ----
-MIN_ADDRESS_AGE_BLOCKS = 1440     # ~1 day at 60 s (Aric 2026-10-23); a sender must have first received coins this many blocks earlier
+MIN_ADDRESS_AGE_BLOCKS = 1440     # ~1 day at 60 s (set 2026-10-23); a sender must have first received coins this many blocks earlier
 SENDER_TX_CAP_PER_EPOCH = 30      # point-earning transfers per sender per epoch
 # Reciprocal rule: if A->B already earned this epoch, B->A earns nothing (ping-pong farming).
 

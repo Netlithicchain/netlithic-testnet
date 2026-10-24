@@ -45,12 +45,12 @@ pre-fork history unchanged).
 * **CPU.** `first_seen_heights` is one pass over the chain, the same order of
   cost as today's points computation.
 
-## Decisions for Aric
+## Parameters and review
 
-Approved by Aric 2026-10-23: 30 per period, 1440-block address wait, 1440-block testnet payout period, reciprocal rule. Change them before
+Values: 30 per period, 1440-block address wait, 1440-block testnet payout period, reciprocal rule. Change them before
 height 5000 only. After 5000 a change needs a new fork height.
 
-**Decided (Aric, Oct 23 2026):** the v2 rules stay as built and the per-address
+The v2 rules stay as built and the per-address
 payout cap stays at 25,000 test coins. **Review after the first payout:** once the
 first post-5000 epoch pays out, check the payout list for farming patterns (many
 new addresses, ring transfers, one miner dominating) and decide whether the

@@ -1,6 +1,6 @@
 # Reorg rule (active from block 5000)
 
-**Rule:** a node never replaces more than **720 blocks** (`MAX_REORG_DEPTH = 720`, about 12 hours at 60-second blocks; approved by Aric 2026-10-23, was 100)
+**Rule:** a node never replaces more than **720 blocks** (`MAX_REORG_DEPTH = 720`, about 12 hours at 60-second blocks; approved 2026-10-23, was 100)
 of its own chain, even if a peer offers a chain with more work. It also never
 replaces a block listed in `config/checkpoints.json`. Shorter forks (1–720 blocks)
 are resolved normally by most work.

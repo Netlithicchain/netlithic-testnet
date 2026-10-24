@@ -60,10 +60,10 @@ PAIR_CAP_PER_EPOCH = 10
 # are unchanged; every node running this code applies it at the same height.
 # Only chains whose chain_id starts with DEV_CHAIN_PREFIX can use it; any other
 # chain_id (mainnet) is refused below and keeps the normal 175,200-block epoch.
-# Aric confirmed 2026-10-22: fork at block 5000 (same height the founder server
+# Confirmed by the founder 2026-10-22: fork at block 5000 (same height the founder server
 # stops mining and the difficulty fork activates), epoch 144 blocks
 # (~1 day at the founder miner's 10-minute pace; ~2.4 h at 1-minute blocks).
-# Updated by Aric 2026-10-23: 1440 blocks (~1 day at 60 s). First payout at block 6440.
+# Updated 2026-10-23: 1440 blocks (~1 day at 60 s). First payout at block 6440.
 # EXPLICIT chain_id dependency (review note): the 1440-block daily period
 # applies ONLY when config/genesis_config.json has chain_id == SHORT_EPOCH_CHAIN_ID.
 # Any other chain_id (a renamed testnet, mainnet) silently keeps the normal

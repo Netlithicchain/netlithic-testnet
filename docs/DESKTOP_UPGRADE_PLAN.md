@@ -19,11 +19,11 @@ pause, 720-block reorg limit or anti-farming v2. **They split off the network at
 ## Timeline (60 s blocks after 5000; ~10 min today)
 | When | Action |
 |---|---|
-| Release (~Nov 9) | Publish 0.5.0 desktop builds for Win/macOS/Linux plus checksums, after Aric approves. The founder server goes first. |
-| Release +1 day | Marketing sends the required-update notice (after Aric approves). |
+| Release (~Nov 9) | Publish 0.5.0 desktop builds for Win/macOS/Linux plus checksums, once approved. The founder server goes first. |
+| Release +1 day | Marketing sends the required-update notice (once approved). |
 | Weekly | Check the explorer's "nodes ready" count, then remind anyone who hasn't updated. |
 | Block ~4800 | Final reminder. |
 | Block 4900 | Upgraded nodes refuse new handshakes from pre-0.5.0 nodes. |
 | Block 5000 | Fork. Anyone still on an old build is on a dead branch: install 0.5.0 and resync (data and wallets are kept). |
 
-Installers are **not** built by this change. Builds and publishing need Aric's yes.
+Installers are **not** built by this change. Builds and publishing need the founder's approval.

@@ -1,4 +1,4 @@
-# Pause key ceremony (for Aric, do this yourself)
+# Pause key ceremony (for the project key holder, do this yourself)
 
 The pause switch only works if `PAUSE_PUBKEY` is set. The matching **private key**
 must exist only on paper or metal and on a computer that never goes online.

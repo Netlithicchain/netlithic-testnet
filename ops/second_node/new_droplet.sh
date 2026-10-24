@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # OPTION B (recommended, ~$6/month): a second public node on its own droplet.
-# NOT RUN. Run as root on a NEW Ubuntu 24.04 droplet (1 vCPU / 1 GB, $6/mo) after Aric approves.
+# NOT RUN. Run as root on a NEW Ubuntu 24.04 droplet (1 vCPU / 1 GB, $6/mo) after the founder approves.
 # The node holds no wallets or keys and does not mine; it only relays and serves the chain.
 set -euo pipefail
 SEED=${SEED:-http://137.184.199.238:8000}

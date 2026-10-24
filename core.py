@@ -48,7 +48,7 @@ POW_LIMIT = 2 ** 256
 # From SECURITY_FORK_HEIGHT: reorg depth limit, checkpoints, stricter stall rule,
 # anti-farming v2 for points. See docs/THREAT_MODEL.md and docs/CONFIRMATIONS.md.
 SECURITY_FORK_HEIGHT = 5000
-MAX_REORG_DEPTH = 720              # node policy from 5000: never roll back more than this (~12 h at 60 s; Aric 2026-10-23)
+MAX_REORG_DEPTH = 720              # node policy from 5000: never roll back more than this (~12 h at 60 s; set 2026-10-23)
 # {"height": "hash"}; shipped with the release (may be empty). Resolved next to
 # this file so it works whatever the node's working directory (desktop app).
 CHECKPOINTS_FILE = os.environ.get(

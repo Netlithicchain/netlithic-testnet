@@ -1,4 +1,4 @@
-"""Payout pause switch (Aric-only, public, logged). OFF until PAUSE_PUBKEY is set.
+"""Payout pause switch (key-holder-only, public, logged). OFF until PAUSE_PUBKEY is set.
 
 A pause is an on-chain transaction, so every pause/resume is public and
 permanent in the chain (the log is the chain itself):
@@ -26,9 +26,9 @@ from typing import Dict, Iterable, List, Optional
 
 from wallet import canonical, pubkey_from_private, verify_signature
 
-PAUSE_PUBKEY = ""          # Aric's pause public key (hex). Empty = feature disabled.
+PAUSE_PUBKEY = ""          # The project key holder's pause public key (hex). Empty = feature disabled.
 MAX_REASON = 280
-PAUSE_EXPIRY_BLOCKS = 10080  # ~7 days at 60 s (Aric 2026-10-23); a pause lapses this many blocks after its last pause/renew
+PAUSE_EXPIRY_BLOCKS = 10080  # ~7 days at 60 s (set 2026-10-23); a pause lapses this many blocks after its last pause/renew
 
 
 def is_pause_tx(tx) -> bool:
@@ -59,7 +59,7 @@ def normalize_pause_tx(tx: dict) -> dict:
 
 
 def make_pause_tx(private_key_hex: str, paused: bool, reason: str, nonce: int, chain_id: str) -> dict:
-    """Sign a pause/resume (run on Aric's own machine, never on a server)."""
+    """Sign a pause/resume (run on the key holder's own machine, never on a server)."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key_hex))
     pub = pubkey_from_private(private_key_hex)

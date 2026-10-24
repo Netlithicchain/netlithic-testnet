@@ -55,13 +55,13 @@ the public log.
 
 ## The pause switch (design)
 
-Goal: one person (Aric) can halt epoch payouts quickly while something is
+Goal: one person (the project key holder) can halt epoch payouts quickly while something is
 investigated. Nothing hidden, no special power over coins.
 
 * **On-chain and public.** A pause is a signed transaction in a block, so every
   pause and resume, with its reason, is permanent in the chain and visible to
   everyone at `GET /pause_status` (`paused`, `nonce`, full `log`).
-* **Aric-only.** Only the key whose public key equals `pause.PAUSE_PUBKEY` can
+* **Key-holder-only.** Only the key whose public key equals `pause.PAUSE_PUBKEY` can
   sign. The key is Ed25519, signed over the chain_id, and nonces 1, 2, 3...
   mean it can't be replayed.
 * **Narrow.** While paused, `expected_payouts` returns nothing, so the community
@@ -75,10 +75,10 @@ investigated. Nothing hidden, no special power over coins.
   (the key is typed at a hidden prompt), then POST the printed JSON to any
   node's `/submit_tx`. To resume, use `resume` with the next nonce. To keep a pause past 10,080 blocks (~7 days), send `renew` before it lapses.
 
-### Open decisions for Aric
+### Pause key status
 1. Generate the pause keypair offline ([PAUSE_KEY_CEREMONY.md](PAUSE_KEY_CEREMONY.md)) and set `PAUSE_PUBKEY` in `pause.py` before 5000.
-2. **Decided:** no back pay. Skipped epochs stay in the pool (verified by test).
-3. **Decided:** a pause expires automatically 10,080 blocks (~7 days at 60 s; Aric 2026-10-23, was 1008) after its last pause/renew tx,
+2. No back pay. Skipped epochs stay in the pool (verified by test).
+3. A pause expires automatically 10,080 blocks (~7 days at 60 s; set 2026-10-23, was 1008) after its last pause/renew tx,
    unless publicly renewed by another signed pause tx (logged as "renew"). Skipped payouts are
    never back-paid; the coins stay in the community pool, so the next paying epoch's earners split
    a larger pool (each still capped at 25k).

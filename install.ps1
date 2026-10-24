@@ -11,3 +11,8 @@ if (-not $py) {
   exit 1
 }
 & $py easy_node.py install @args
+if ($LASTEXITCODE -ne 0) {
+  Write-Host ""
+  Write-Host "The install did not finish (see the message above). Your node was NOT started."
+  exit $LASTEXITCODE
+}

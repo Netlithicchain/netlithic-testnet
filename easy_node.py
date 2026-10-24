@@ -14,10 +14,12 @@ No wallet or key is created or sent anywhere: keys stay on your machine.
 Test coins have no value.  Uninstall:  python easy_node.py uninstall
 """
 import argparse
+import http.client
 import os
 import shutil
 import subprocess
 import sys
+import time
 import venv
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +27,23 @@ SEEDS = ["http://137.184.199.238:8000", "http://157.230.63.97:8000"]
 SERVICE = "netlithic-node"
 LABEL = "org.netlithic.node"
 NOTE = "Netlithic TEST network - test coins have no value."
+TASK_NAME = "Netlithic Node"
+LAUNCHER = "start-node.cmd"   # Windows: tiny file the scheduled task runs; it holds the long command
+TR_LIMIT = 261                # schtasks refuses a /TR value longer than this
+WAIT_SECONDS = 45             # how long install waits for the node to answer on /status
+
+
+class InstallError(Exception):
+    """A step failed. The text is shown to the person in plain words and the program exits non-zero."""
+
+
+def run_cmd(cmd):
+    """Run a command, never raise. Returns (exit code, its output as text)."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", check=False)
+    except OSError as e:
+        return 127, f"could not start '{cmd[0]}': {e}"
+    return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 
 
 def platform_name(p=None):
@@ -74,9 +93,59 @@ def service_file(plat, cmd, log_path):
                 "  </array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n"
                 f"  <key>StandardOutPath</key><string>{log_path}</string>\n"
                 f"  <key>StandardErrorPath</key><string>{log_path}</string>\n</dict></plist>\n")
-    # windows: scheduled task at logon, no admin needed
-    q = " ".join(f'"{c}"' for c in cmd)
-    return (None, q)
+    # windows: scheduled task at logon, no admin needed. The task runs a short launcher file
+    # (see launcher_text); the long command lives in that file, not in schtasks' /TR.
+    return (None, launcher_text(cmd))
+
+
+def launcher_text(cmd):
+    """Text of the Windows launcher (.cmd). It starts the node and returns at once."""
+    def q(c):
+        return '"' + str(c).replace("%", "%%") + '"'     # % is special inside .cmd files
+    lines = ["@echo off"]
+    if any(ord(ch) > 127 for ch in " ".join(cmd)):
+        lines.append("chcp 65001 >nul")                   # folder names with accents
+    lines += [f"rem {NOTE}", 'start "" /B ' + " ".join(q(c) for c in cmd)]
+    return "\r\n".join(lines) + "\r\n"
+
+
+def task_command(launcher_path):
+    """The schtasks /TR value: just the launcher path, quoted so folders with spaces work."""
+    return '"' + launcher_path + '"'
+
+
+def short_path(p):
+    """Windows 8.3 short form of an existing folder (no spaces, shorter). Elsewhere: unchanged."""
+    if os.name != "nt":
+        return p
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(32768)
+        n = ctypes.windll.kernel32.GetShortPathNameW(p, buf, len(buf))
+        return buf.value if 0 < n < len(buf) else p
+    except Exception:
+        return p
+
+
+def fallback_dirs(home):
+    return [os.path.join(home, ".netlithic")]
+
+
+def choose_launcher(base, home):
+    """Pick a launcher path whose /TR value fits schtasks' limit: the Netlithic folder first, then its
+    8.3 short name, then a short folder in the user profile. Fails clearly if none fits."""
+    os.makedirs(base, exist_ok=True)
+    cands = [os.path.join(base, LAUNCHER), os.path.join(short_path(base), LAUNCHER)]
+    for d in fallback_dirs(home):
+        os.makedirs(d, exist_ok=True)
+        cands += [os.path.join(d, LAUNCHER), os.path.join(short_path(d), LAUNCHER)]
+    for c in cands:
+        if len(task_command(c)) <= TR_LIMIT:
+            return c
+    raise InstallError(
+        f"The folder name is too long for Windows' scheduled tasks (the limit is {TR_LIMIT} characters, "
+        f"and even the shortest place I tried was longer). Nothing was started.\n"
+        f"Try again with a shorter folder, for example:  python easy_node.py install --base-dir C:\\Netlithic")
 
 
 def register_commands(plat, svc_path, task_cmd=None):
@@ -85,8 +154,9 @@ def register_commands(plat, svc_path, task_cmd=None):
                 ["systemctl", "--user", "enable", "--now", SERVICE]]
     if plat == "macos":
         return [["launchctl", "unload", svc_path], ["launchctl", "load", "-w", svc_path]]
-    return [["schtasks", "/Create", "/F", "/SC", "ONLOGON", "/TN", "Netlithic Node", "/TR", task_cmd],
-            ["schtasks", "/Run", "/TN", "Netlithic Node"]]
+    return [["schtasks", "/Create", "/F", "/SC", "ONLOGON", "/TN", TASK_NAME, "/TR", task_cmd],
+            ["schtasks", "/End", "/TN", TASK_NAME],      # a re-install: stop the old copy first (may not be running)
+            ["schtasks", "/Run", "/TN", TASK_NAME]]
 
 
 def unregister_commands(plat, svc_path):
@@ -94,7 +164,7 @@ def unregister_commands(plat, svc_path):
         return [["systemctl", "--user", "disable", "--now", SERVICE]]
     if plat == "macos":
         return [["launchctl", "unload", "-w", svc_path]]
-    return [["schtasks", "/End", "/TN", "Netlithic Node"], ["schtasks", "/Delete", "/F", "/TN", "Netlithic Node"]]
+    return [["schtasks", "/End", "/TN", TASK_NAME], ["schtasks", "/Delete", "/F", "/TN", TASK_NAME]]
 
 
 def plan(args):
@@ -106,12 +176,65 @@ def plan(args):
     cmd = node_command(py, data, args.port, args.host, args.advertise_url)
     rel, text = service_file(plat, cmd, os.path.join(base, "node.log"))
     svc = os.path.join(home, rel) if rel else None
+    launcher = os.path.join(base, LAUNCHER) if plat == "windows" else None
     return dict(platform=plat, base=base, venv=vdir, data=data, python=py, command=cmd,
-                service_path=svc, service_text=text)
+                service_path=svc, service_text=text, home=home, launcher_path=launcher,
+                task_cmd=task_command(launcher) if launcher else None)
 
 
 def say(m=""):
     print(m, flush=True)
+
+
+def wait_for_node(port, seconds=WAIT_SECONDS):
+    """True once the node answers http://127.0.0.1:<port>/status, False if it stays silent."""
+    end = time.time() + seconds
+    while True:
+        try:
+            c = http.client.HTTPConnection("127.0.0.1", int(port), timeout=2)
+            try:
+                c.request("GET", "/status")
+                if c.getresponse().status == 200:
+                    return True
+            finally:
+                c.close()
+        except (OSError, http.client.HTTPException):
+            pass
+        if time.time() >= end:
+            return False
+        time.sleep(1)
+
+
+def _failed(what, cmd, rc, out):
+    return InstallError(f"{what}\n  command: {subprocess.list2cmdline(cmd)}\n  exit code: {rc}\n  it said: {out or '(nothing)'}")
+
+
+def start_service(p):
+    """Register and start the background service. Raises InstallError on the first real failure."""
+    optional = (["launchctl", "unload"], ["schtasks", "/End"])    # fine to fail: nothing was running yet
+    for c in register_commands(p["platform"], p["service_path"], p["task_cmd"]):
+        rc, out = run_cmd(c)
+        if rc != 0 and c[:2] not in optional:
+            what = "Windows could not set up the background task, so your node was NOT started." \
+                if c[0] == "schtasks" else "The background service could not be set up, so your node was NOT started."
+            raise _failed(what, c, rc, out)
+
+
+def _build_env(p, args):
+    if not args.no_venv:
+        if not os.path.exists(p["python"]):
+            say("Setting up a private Python environment (one time, about a minute)...")
+            try:
+                venv.EnvBuilder(with_pip=True).create(p["venv"])
+            except Exception as e:
+                raise InstallError(f"Could not create the private Python environment in {p['venv']}: {e}")
+        if not os.path.exists(p["python"]):
+            raise InstallError(f"The private Python environment was not created (missing {p['python']}). "
+                               "Nothing was started.")
+        c = [p["python"], "-m", "pip", "install", "--quiet", "-r", os.path.join(ROOT, "requirements.txt")]
+        rc, out = run_cmd(c)
+        if rc != 0:
+            raise _failed("Could not install what the node needs (pip failed), so your node was NOT started.", c, rc, out)
 
 
 def install(args):
@@ -122,19 +245,26 @@ def install(args):
         say("[dry run] would write service:\n" + p["service_text"])
         return p
     os.makedirs(p["data"], exist_ok=True)
-    if not args.no_venv:
-        if not os.path.exists(p["python"]):
-            say("Setting up a private Python environment (one time, about a minute)...")
-            venv.EnvBuilder(with_pip=True).create(p["venv"])
-        subprocess.run([p["python"], "-m", "pip", "install", "--quiet", "-r",
-                        os.path.join(ROOT, "requirements.txt")], check=True)
+    _build_env(p, args)
     if p["service_path"]:
         os.makedirs(os.path.dirname(p["service_path"]), exist_ok=True)
         with open(p["service_path"], "w", encoding="utf-8") as f:
             f.write(p["service_text"])
+    if p["platform"] == "windows":
+        p["launcher_path"] = choose_launcher(p["base"], p["home"])
+        p["task_cmd"] = task_command(p["launcher_path"])
+        os.makedirs(os.path.dirname(p["launcher_path"]), exist_ok=True)
+        with open(p["launcher_path"], "w", encoding="utf-8", newline="") as f:
+            f.write(p["service_text"])
     if not args.no_service:
-        for c in register_commands(p["platform"], p["service_path"], p["service_text"]):
-            subprocess.run(c, check=False)
+        start_service(p)
+        say(f"Started. Waiting up to {WAIT_SECONDS} seconds for your node to answer...")
+        if not wait_for_node(args.port):
+            raise InstallError(
+                f"The background service was created, but your node did not answer at "
+                f"http://127.0.0.1:{args.port}/status within {WAIT_SECONDS} seconds, so I can't say it works.\n"
+                f"It may just be slow to start: try that address in a browser in a minute. If it stays empty, run "
+                f"'python easy_node.py uninstall' and then install again, and send me the text above.")
     say(f"\nDone. Your node runs in the background and joins: {', '.join(SEEDS)}")
     say(f"Check it in a browser: http://127.0.0.1:{args.port}/status")
     say("To remove it later: python easy_node.py uninstall (your data folder is kept).")
@@ -144,10 +274,27 @@ def install(args):
 def uninstall(args):
     p = plan(args)
     if not args.dry_run:
+        problems = []
         for c in unregister_commands(p["platform"], p["service_path"]):
-            subprocess.run(c, check=False)
-        if p["service_path"] and os.path.exists(p["service_path"]):
-            os.remove(p["service_path"])
+            rc, out = run_cmd(c)
+            if rc != 0:
+                if p["platform"] == "windows" and c[1] == "/Delete":
+                    # "not found" is fine (already gone); anything else only counts if the task is still there
+                    qrc, _ = run_cmd(["schtasks", "/Query", "/TN", TASK_NAME])
+                    if qrc == 0:
+                        problems.append(_failed("Windows would not remove the background task, so your node may "
+                                                "still start at login.", c, rc, out))
+                # other 'stop' steps fail harmlessly when the service was not running
+        if problems:
+            raise problems[0]
+        for f in (p["service_path"], p["launcher_path"]):
+            if f and os.path.exists(f):
+                os.remove(f)
+        if p["platform"] == "windows":
+            for d in fallback_dirs(p["home"]):
+                for f in (os.path.join(d, LAUNCHER), os.path.join(short_path(d), LAUNCHER)):
+                    if os.path.exists(f):
+                        os.remove(f)
         if not args.keep_venv and os.path.isdir(p["venv"]):
             shutil.rmtree(p["venv"])
     say(f"Service removed. Data kept in {p['data']} (delete it yourself if you want).")
@@ -172,7 +319,12 @@ def main(argv=None):
         p = plan(a)
         say(p["service_text"])
         return p
-    return install(a) if a.action == "install" else uninstall(a)
+    try:
+        return install(a) if a.action == "install" else uninstall(a)
+    except InstallError as e:
+        print(f"\nERROR: {e}\n\nYour node was NOT started. Fix the problem above and run the installer again.",
+              file=sys.stderr, flush=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

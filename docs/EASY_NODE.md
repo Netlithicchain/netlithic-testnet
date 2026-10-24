@@ -6,7 +6,11 @@ No wallet or key is made, and nothing private leaves your computer.
 ## Windows
 1. Install Python from python.org (tick "Add python.exe to PATH").
 2. Download the Netlithic folder, right-click `install.ps1` and pick "Run with PowerShell".
-3. Done. The node starts each time you log in. Open http://127.0.0.1:8000/status to see it.
+3. When the window says "Done", the node is running and starts each time you log in. Open
+   http://127.0.0.1:8000/status to see it. If something goes wrong the installer says so in plain words,
+   shows what Windows answered, and does NOT say "Done".
+   (Windows runs a small file, `start-node.cmd`, in the Netlithic folder; it works even if your user
+   folder name has spaces, like `C:\Users\Jane Doe`.)
 
 ## Mac
 1. Install Python from python.org.

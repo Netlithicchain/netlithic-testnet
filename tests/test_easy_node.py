@@ -77,7 +77,7 @@ def test_installers_call_easy_node():
 
 
 # ---------------------------------------------------------------------------
-# Windows scheduled task: short launcher, loud failures (Aric's first Windows run:
+# Windows scheduled task: short launcher, loud failures (the founder's first Windows run:
 # a user folder with a space made the /TR command longer than schtasks' 261 limit,
 # schtasks failed, and the installer still printed "Done").
 # ---------------------------------------------------------------------------
@@ -85,7 +85,7 @@ import subprocess
 import types
 
 TR_LIMIT = 261
-LONG_USER = "Aric Vennen"
+LONG_USER = "Sam Example"
 
 
 class FakeSchtasks:
@@ -124,7 +124,7 @@ class FakeSchtasks:
 
 @pytest.fixture
 def win(tmp_path, monkeypatch):
-    """A fake 'Aric Vennen' Windows home with a deep base folder, schtasks mocked, node 'comes up'."""
+    """A fake 'Sam Example' Windows home with a deep base folder, schtasks mocked, node 'comes up'."""
     home = tmp_path / LONG_USER
     base = home / "AppData" / "Local" / "Netlithic"
     fake = FakeSchtasks()
@@ -327,7 +327,7 @@ def test_uninstall_when_task_never_existed_is_fine(win, capsys):
 
 # ---------------------------------------------------------------------------
 # No-admin fallback. On a normal (non-admin) Windows account `schtasks /Create` says "Access is denied"
-# (seen on Aric's real PC). Then the node is started from the per-user Startup folder instead.
+# (seen on the founder's real PC). Then the node is started from the per-user Startup folder instead.
 # ---------------------------------------------------------------------------
 STARTUP = os.path.join("Microsoft", "Windows", "Start Menu", "Programs", "Startup")
 
@@ -523,7 +523,7 @@ def test_docs_and_installer_mention_both_methods():
 
 
 # ---------------------------------------------------------------------------
-# Uninstall hardening. Real bug (Aric's PC): `uninstall` crashed with a raw traceback, PermissionError
+# Uninstall hardening. Real bug (the founder's PC): `uninstall` crashed with a raw traceback, PermissionError
 # [WinError 5] on venv\Lib\site-packages\cryptography\hazmat\bindings\_rust.pyd, because the node (pythonw from
 # that venv) was still running and holding the file open.
 # ---------------------------------------------------------------------------

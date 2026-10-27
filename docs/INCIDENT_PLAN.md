@@ -44,7 +44,7 @@ blocks that are already final.
 
 **Flooding.** Rate limits are on by default (`NETLITHIC_RATE_PER_SECOND`,
 `NETLITHIC_RATE_BURST`, `NETLITHIC_MAX_MEMPOOL`). Tighten them with env vars and
-block abusive IPs at the firewall (`ops/hardening/`).
+block abusive IPs at the firewall.
 
 **Key / token compromise.** Rotate the admin token (env
 `NETLITHIC_ADMIN_TOKEN`), the Discord bot token and the webhook at their
@@ -76,7 +76,7 @@ investigated. Nothing hidden, no special power over coins.
   node's `/submit_tx`. To resume, use `resume` with the next nonce. To keep a pause past 10,080 blocks (~7 days), send `renew` before it lapses.
 
 ### Pause key status
-1. Generate the pause keypair offline ([PAUSE_KEY_CEREMONY.md](PAUSE_KEY_CEREMONY.md)) and hand over the PUBLIC key; it is set in `pause.py` with `ops/set_pause_pubkey.py` and ships in 0.5.1, before block 4900.
+1. Generate the pause keypair offline (the founder's private offline procedure) and hand over the PUBLIC key; it is set in `pause.py` with `ops/set_pause_pubkey.py` and ships in 0.5.1, before block 4900.
 2. **Decided:** no back pay. Skipped epochs stay in the pool (verified by test).
 3. **Decided:** a pause expires automatically 10,080 blocks (~7 days at 60 s; set 2026-10-23, was 1008) after its last pause/renew tx,
    unless publicly renewed by another signed pause tx (logged as "renew"). Skipped payouts are

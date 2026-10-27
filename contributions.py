@@ -46,10 +46,10 @@ SENDER_TX_CAP_PER_EPOCH = 30      # point-earning transfers per sender per epoch
 # Reciprocal rule: if A->B already earned this epoch, B->A earns nothing (ping-pong farming).
 
 
-# ---- Points v3 (applies to payouts at height >= core.POINTS_V4_HEIGHT; see docs/POINTS_V3.md) ----
-MAX_BASE_PER_POINT: Optional[int] = None   # review M2: optional ceiling on NLT paid per whole point (off; see docs/POINTS_V3.md)
+# ---- Points v3 (applies to payouts at height >= core.POINTS_V4_HEIGHT) ----
+MAX_BASE_PER_POINT: Optional[int] = None   # review M2: optional ceiling on NLT paid per whole point (off)
 # Review M1 decision: the family rule is OFF in consensus (design A: slow release + two pots only). The code, the
-# issuer list and the tests stay so a later announced fork can switch it on. See docs/POINTS_V3.md "Recommendation".
+# issuer list and the tests stay so a later announced fork can switch it on.
 FAMILY_RULE_ENABLED = False
 FAMILY_PAIR_CAP: Optional[int] = None      # transfer points per (sender family, recipient family) pair per period; None = off
 # ---- Points v4 (same fork height as v3; v3 never shipped, v4 replaces it) ----
@@ -57,7 +57,7 @@ TX_POT_PERCENT = 20        # share of each period's release paid for transfers; 
 POT_CAP_PERCENT = 2        # one address can take at most this % of EACH pot per period (floor, in base units); None = off
 PAYOUT_LAG_PERIODS = 1     # payout for period N is paid in the block that ends period N+1 (1,440 blocks later); 0 = old v3 timing
 # Addresses that hand out coins to many unrelated people. An address first funded by one of these starts
-# a family of its own instead of joining the issuer's. All from public sources (docs/POINTS_V3.md):
+# a family of its own instead of joining the issuer's. All from public sources (the explorer /founder page and the genesis file):
 FAMILY_ISSUERS: tuple = (
     "e924523b2614a39b9bb4ff8bfc05e747",  # founder server miner + faucet: explorer /founder page, 6 x 10 NLT drips on chain
     "f953a95407a5ae8bba986101d1f9b272",  # genesis allocation: community (locked, pays only by protocol payout)
@@ -80,7 +80,7 @@ def validate_family_issuers(issuers: tuple = None) -> tuple:
     issuers = FAMILY_ISSUERS if issuers is None else issuers
     if not isinstance(issuers, tuple) or not issuers:
         raise FamilyIssuerError("FAMILY_ISSUERS is empty: this build must ship the public issuer addresses "
-                                "(see docs/POINTS_V3.md). Refusing to start.")
+                                "Refusing to start.")
     for a in issuers:
         if not (isinstance(a, str) and len(a) == 32 and all(ch in "0123456789abcdef" for ch in a)):
             raise FamilyIssuerError(f"FAMILY_ISSUERS has a malformed address: {a!r} (need 32 lowercase hex characters).")

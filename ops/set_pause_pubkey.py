@@ -7,7 +7,7 @@
 Safety rules built in:
   * Only a PUBLIC key is wanted: 64 hex characters that are a valid Ed25519 point. A private key is also 64 hex,
     so this tool cannot tell them apart. Use the line labelled "PUBLIC KEY" from ops/pause_keygen.py, and check
-    that ops/pause_tx.py prints the same "pubkey" (docs/PAUSE_KEY_CEREMONY.md step 6).
+    that ops/pause_tx.py prints the same "pubkey" (last step of the founder's offline key procedure).
   * It writes only pause.py (or --file PATH), changes only the one PAUSE_PUBKEY line, and shows the key in groups of
     8 characters plus its short key id so you can compare it with the founder's paper copy character by character.
   * It never generates a key and never reads a key file.

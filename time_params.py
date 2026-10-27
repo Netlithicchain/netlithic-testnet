@@ -6,7 +6,7 @@ Before block 5000 the chain makes ~1 block per 10 minutes (founder timer), after
 count therefore means very different real time before and after the fork.
 These constants state each rule as a time and convert it at the 60 s target.
 Nothing in core/pause/contributions/economics reads this module yet; apply() exists
-only so tests and drills can try the values. See docs/BLOCK_TIME_AUDIT.md.
+only so tests and drills can try the values.
 """
 PROPOSAL_ACTIVE = True              # all four values approved 2026-10-23 and set in the modules
 TARGET_BLOCK_SECONDS = 60           # == core.LWMA_TARGET_BLOCK_TIME (checked in tests)

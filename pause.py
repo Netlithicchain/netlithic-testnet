@@ -30,7 +30,7 @@ from wallet import canonical, is_valid_pubkey_hex, pubkey_from_private, verify_s
 # PAUSE KEY SLOT. This is the ONLY place the pause PUBLIC key goes (64 lowercase hex characters).
 #
 #   * It is EMPTY on purpose until the founder hands over his PUBLIC key from the offline ceremony
-#     (docs/PAUSE_KEY_CEREMONY.md). Empty = the pause switch is disabled.
+#     (the founder's offline key procedure, kept private). Empty = the pause switch is disabled.
 #   * Fill it with the tool, never by hand:   python ops/set_pause_pubkey.py <public key hex>
 #   * Check it before a release:              python ops/set_pause_pubkey.py --check
 #     (exits 1 while the slot is empty, so an empty 0.5.1 can never pass the release gate).

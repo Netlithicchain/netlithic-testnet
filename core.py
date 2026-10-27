@@ -51,7 +51,7 @@ POW_LIMIT = 2 ** 256
 
 # ---- Security fork (same height as LWMA; every node must upgrade before it) ----
 # From SECURITY_FORK_HEIGHT: reorg depth limit, checkpoints, stricter stall rule,
-# anti-farming v2 for points. See docs/THREAT_MODEL.md and docs/CONFIRMATIONS.md.
+# anti-farming v2 for points. See docs/CONFIRMATIONS.md.
 SECURITY_FORK_HEIGHT = 5000
 POINTS_V4_HEIGHT = SECURITY_FORK_HEIGHT   # THE announced fork height for the points rules: slow release, 20/80 pots, 2% per-address cap, one-day payout lag.
 # (v3 never shipped; v4 replaces it at the same height.)

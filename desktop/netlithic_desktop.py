@@ -37,7 +37,7 @@ DESKTOP_STATIC = os.path.join(CODE_ROOT, "desktop", "static")
 PUBLIC_SITE = os.environ.get("NETLITHIC_PUBLIC_SITE", "https://testnet.netlithicchain.com").rstrip("/")
 # Public seed nodes, tried in order. NETLITHIC_SEED_URLS (comma-separated) overrides;
 # the old single NETLITHIC_SEED_URL still works. Node 1 = netlithic-testnet-1,
-# node 2 = netlithic-testnet-2 (relay only; see docs/STURDY_TESTNET.md).
+# node 2 = netlithic-testnet-2 (relay only).
 DEFAULT_SEEDS = ["http://137.184.199.238:8000", "http://157.230.63.97:8000"]
 
 

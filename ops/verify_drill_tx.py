@@ -18,8 +18,8 @@ import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-# inside a repo checkout (ops/verify_drill_tx.py) the repo is the parent folder; the loose copy uses the builder's checkout
-_DEFAULT_REPO = os.path.dirname(_HERE) if os.path.isfile(os.path.join(os.path.dirname(_HERE), "pause.py")) else "/workspace/nl-v4h"
+# inside a repo checkout (ops/verify_drill_tx.py) the repo is the parent folder; a loose copy of this script must be given --repo
+_DEFAULT_REPO = os.path.dirname(_HERE) if os.path.isfile(os.path.join(os.path.dirname(_HERE), "pause.py")) else None
 
 
 def main():
@@ -29,6 +29,8 @@ def main():
     ap.add_argument("--chain-id", default="netlithic-drill")
     ap.add_argument("--real-chain-id", default="netlithic-dev-1", help="the live chain; a tx valid here is DANGER")
     a = ap.parse_args()
+    if not a.repo:
+        ap.error("--repo is required when this script is run outside a repo checkout (give the folder that holds pause.py)")
     sys.path.insert(0, os.path.abspath(a.repo))
     import pause
     raw = sys.stdin.read() if a.tx == "-" else open(a.tx, encoding="utf-8").read()

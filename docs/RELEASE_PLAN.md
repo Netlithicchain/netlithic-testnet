@@ -20,8 +20,8 @@ Step-by-step server upgrade: the project's own servers follow a private runbook.
 ## What is in it
 
 Reorg limit 720 plus shipped checkpoints ([REORG_RULE.md](REORG_RULE.md)), anti-farming v2 with the 25k
-cap ([ANTI_FARMING_V2.md](ANTI_FARMING_V2.md)), and the signed payout pause with 10,080-block (~7 day)
-auto-expiry ([INCIDENT_PLAN.md](INCIDENT_PLAN.md), [PAUSE_KEY_CEREMONY.md](PAUSE_KEY_CEREMONY.md)).
+cap (see the points rules in `contributions.py`), and the signed payout pause with 10,080-block (~7 day)
+auto-expiry ([INCIDENT_PLAN.md](INCIDENT_PLAN.md)).
 Also stall hardening, rate limits and the version shown everywhere (`/status`,
 wallet, explorer, desktop app, `--version`).
 
@@ -45,7 +45,7 @@ wallet, explorer, desktop app, `--version`).
 - [ ] **Never set `NETLITHIC_ALLOW_PRIVATE_PEERS` on public seeds.** It turns off the peer address checks (F1/F1b). It is for local test nets only. Check the systemd units and env files on both seeds.
 - [ ] Desktop installers signed: Windows Authenticode and macOS notarization (see DESKTOP_UPGRADE_PLAN.md).
 - [ ] Outreach to node runners finished **before block 4900**, when outdated peers start being refused.
-- [ ] Pause-key ceremony done and `PAUSE_PUBKEY` set **before block 4900** in 0.5.1 (PAUSE_KEY_CEREMONY.md, F8).
+- [ ] Pause-key ceremony done and `PAUSE_PUBKEY` set **before block 4900** in 0.5.1 (founder's private procedure).
       Release gate: `python ops/set_pause_pubkey.py --check` exits 0. **Never ship a 0.5.1 with an empty key.**
 - [ ] All servers show the same `pause_key_id` in `/status`; healthcheck `expected_pause_key_id` is set to it.
 - [ ] Each node logs its checkpoint count at startup and agrees with the block 400 checkpoint (F10).
@@ -78,4 +78,4 @@ Your wallets and data folder are not changed by the update. Never send anyone yo
 Sync from `/receive_block` is triggered only by known peers with public addresses, rate-limited. The stall rule has no wall clock.
 Peers older than 0.5.1 (`MIN_PEER_VERSION`) get warned, then new handshakes are refused from block 4900
 (already-connected peers are not dropped, so this is a warning and exposure limit, not a hard split guard). See [DESKTOP_UPGRADE_PLAN.md](DESKTOP_UPGRADE_PLAN.md),
-[CHECKPOINT_SIGNING.md](CHECKPOINT_SIGNING.md), [ECLIPSE_RECOVERY.md](ECLIPSE_RECOVERY.md). Tracking drafts are in `docs/issues/`.
+[CHECKPOINT_SIGNING.md](CHECKPOINT_SIGNING.md), [ECLIPSE_RECOVERY.md](ECLIPSE_RECOVERY.md).

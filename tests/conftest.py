@@ -154,3 +154,14 @@ def _registry_valid_until_cap(request, monkeypatch):
     except Exception:  # pragma: no cover
         return
     monkeypatch.setattr(registry, "REGISTRY_MAX_VALID_BLOCKS", 10 ** 13)
+
+
+def read_private_doc(*parts):
+    """Read a doc that lives only in the private netlithic-core repo (runbooks, points v4 notes).
+    In the public repo those files are not published, so the test that checks their wording is skipped."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, *parts)
+    if not os.path.exists(path):
+        pytest.skip("doc is kept in the private repo, not published here: " + "/".join(parts))
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()

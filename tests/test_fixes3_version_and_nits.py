@@ -10,6 +10,7 @@ import pytest
 import netlithic_version as nv
 import registry
 from registry import normalize_registry_tx, sign_registry_tx
+from conftest import read_private_doc
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -53,7 +54,7 @@ def test_n3_no_stale_current_version_left_in_code_or_runbooks():
 @pytest.mark.parametrize("doc", ["docs/UPGRADE_RUNBOOK_0.5.1.md", "docs/RELEASE_PLAN.md", "docs/POINTS_V4.md",
                                  "docs/DESKTOP_UPGRADE_PLAN.md"])
 def test_n3_docs_say_builds_before_0_5_3_are_unsupported(doc):
-    text = _read(*doc.split("/"))
+    text = read_private_doc(*doc.split("/"))
     assert "0.5.3" in text
     low = " ".join(text.split())
     assert "before 0.5.3" in low and "unsupported" in low
@@ -61,7 +62,7 @@ def test_n3_docs_say_builds_before_0_5_3_are_unsupported(doc):
 
 
 def test_n3_runbook_names_the_dev_builds_and_says_upgrade_together():
-    low = " ".join(_read("docs", "UPGRADE_RUNBOOK_0.5.1.md").split())
+    low = " ".join(read_private_doc("docs", "UPGRADE_RUNBOOK_0.5.1.md").split())
     assert "eb4e3d5" in low and "4080424" in low
     assert "All nodes must upgrade together" in low
 

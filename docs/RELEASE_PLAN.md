@@ -1,6 +1,6 @@
 # Release plan: Netlithic 0.5.1 (security fork at block 5000, with the pause key)
 
-> **Update: the build that goes out is 0.5.3** (`VERSION` and `MIN_PEER_VERSION` = 0.5.3, security review M1). Read "0.5.1" below as 0.5.3 for the version nodes must report. A plain 0.5.1 node would split at block **6440**. See UPGRADE_RUNBOOK_0.5.1.md section 7.
+> **Update: the build that goes out is 0.5.3** (`VERSION` and `MIN_PEER_VERSION` = 0.5.3, security review M1). Read "0.5.1" below as 0.5.3 for the version nodes must report. A plain 0.5.1 node would split at block **6440**. The step-by-step server runbook is kept in the project's private repository.
 >
 > **Only 0.5.3 is supported.** Builds before 0.5.3 (0.5.0, 0.5.1, every 0.5.2 development build including `eb4e3d5` and `4080424`) are unsupported.
 > All nodes must upgrade together, before block 4900. The node-runner announcement must give at least 14 days' notice.
@@ -15,8 +15,7 @@ Every node must run 0.5.1 before block 5000 and before the first pause is ever s
 empty pause key and would reject the block carrying a pause tx, so it would split off. Older nodes follow
 different rules from 5000 and split off too.
 
-Step-by-step server upgrade: [UPGRADE_RUNBOOK_0.5.1.md](UPGRADE_RUNBOOK_0.5.1.md) (0.5.0 version:
-[UPGRADE_RUNBOOK_0.5.0.md](UPGRADE_RUNBOOK_0.5.0.md)).
+Step-by-step server upgrade: the project's own servers follow a private runbook. If you run a node on your own machine, update as described in [JOIN_TESTNET.md](JOIN_TESTNET.md) ("Update").
 
 ## What is in it
 

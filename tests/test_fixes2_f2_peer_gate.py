@@ -9,7 +9,7 @@ import pytest
 
 import core
 import netlithic_version as nv
-from conftest import post
+from conftest import post, read_private_doc
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 pytestmark = pytest.mark.registry
@@ -198,6 +198,6 @@ def test_f2_block_validity_does_not_depend_on_the_version_gate():
 
 
 def test_f2_docs_say_what_the_gate_is_and_the_6440_resync_warning():
-    rb = open(os.path.join(ROOT, "docs", "UPGRADE_RUNBOOK_0.5.1.md")).read()
+    rb = read_private_doc("docs", "UPGRADE_RUNBOOK_0.5.1.md")
     assert "before block 6440" in rb and "720" in rb and "wipe" in rb.lower()
     assert "below block 4900" in rb.lower() or "below 4900" in rb.lower()

@@ -41,7 +41,7 @@ def version_string(component: str = "netlithic") -> str:
 # pause key and would reject the first pause block, so they would fork off. Before
 # UPGRADE_DEADLINE_HEIGHT we still peer with them but flag "upgrade needed"; from that height on,
 # /hello refuses new handshakes from them. This does not disconnect peers that are already
-# connected, so it limits exposure and warns people; it is not a hard fork guard (docs/UPGRADE_RUNBOOK_0.5.1.md).
+# connected, so it limits exposure and warns people; it is not a hard fork guard.
 MIN_PEER_VERSION = "0.5.3"
 UPGRADE_DEADLINE_HEIGHT = FORK_READY_HEIGHT - 100   # ~4900: about 16 hours before the fork (blocks before 5000 are ~10 min apart)
 

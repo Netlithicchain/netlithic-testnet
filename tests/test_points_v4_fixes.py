@@ -27,7 +27,7 @@ import netlithic_version as nv
 import pause
 import registry
 import test_registry as tr
-from conftest import build_block, post
+from conftest import build_block, post, read_private_doc
 from core import Block, Blockchain
 from test_registry import (FORK, PERIOD, CID, MINER, HONEST, MERCH, KNOWN, addr, early_miner, key, pay_9320, rtx,
                            scan, second_period_traffic, synth, tx_from, use_key, chain_of, period_of)
@@ -379,7 +379,7 @@ def test_m1_hello_requires_the_rules_fingerprint_after_the_deadline(node, monkey
 
 
 def test_m1_runbook_corrects_the_split_height_and_names_0_5_2():
-    rb = open(os.path.join(ROOT, "docs", "UPGRADE_RUNBOOK_0.5.1.md")).read()
+    rb = read_private_doc("docs", "UPGRADE_RUNBOOK_0.5.1.md")
     assert "split happens at **6440**" in rb and "0.5.3" in rb
     assert "forks the node at **6440**" in rb
     assert "7880, which was wrong" in rb

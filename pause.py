@@ -24,11 +24,68 @@ or touch the treasury.
 """
 from typing import Dict, Iterable, List, Optional
 
-from wallet import canonical, pubkey_from_private, verify_signature
+from wallet import canonical, is_valid_pubkey_hex, pubkey_from_private, verify_signature
 
-PAUSE_PUBKEY = ""          # The project key holder's pause public key (hex). Empty = feature disabled.
+# ---------------------------------------------------------------------------------------------
+# PAUSE KEY SLOT. This is the ONLY place the pause PUBLIC key goes (64 lowercase hex characters).
+#
+#   * It is EMPTY on purpose until the founder hands over his PUBLIC key from the offline ceremony
+#     (docs/PAUSE_KEY_CEREMONY.md). Empty = the pause switch is disabled.
+#   * Fill it with the tool, never by hand:   python ops/set_pause_pubkey.py <public key hex>
+#   * Check it before a release:              python ops/set_pause_pubkey.py --check
+#     (exits 1 while the slot is empty, so an empty 0.5.1 can never pass the release gate).
+#   * NEVER put a private key here. The private key lives only on paper/metal and an offline computer.
+#   * Every node must carry the SAME value. A node with a different or empty value rejects the
+#     block that carries a pause tx and forks off. /status shows pause_enabled and pause_key_id.
+# ---------------------------------------------------------------------------------------------
+PAUSE_PUBKEY = "054a1d9948c3325059835edb1d4fc3f74f40ce2f12bf2417b2ac180eb2737029"  # PAUSE-PUBKEY-SLOT: empty = feature disabled; set only via ops/set_pause_pubkey.py
 MAX_REASON = 280
 PAUSE_EXPIRY_BLOCKS = 10080  # ~7 days at 60 s (set 2026-10-23); a pause lapses this many blocks after its last pause/renew
+
+
+def key_id(pubkey: Optional[str] = None) -> str:
+    """Short public fingerprint of the pause key (first 16 hex of SHA-256); "" while the slot is empty.
+
+    Shown in /status as pause_key_id so everyone can compare it with the value the founder published."""
+    import hashlib
+    pubkey = PAUSE_PUBKEY if pubkey is None else pubkey
+    if pubkey is None or pubkey == "":
+        return ""
+    if not isinstance(pubkey, str):
+        return "invalid"          # a number, list, bytes...: never crash /status over a bad slot
+    try:
+        return hashlib.sha256(bytes.fromhex(pubkey.lower())).hexdigest()[:16]
+    except (ValueError, TypeError):
+        return "invalid"          # not hex at all: never crash /status over it (see key_problem)
+
+
+_KEY_PROBLEM_CACHE: Dict[str, str] = {}
+
+
+def key_problem(pubkey: Optional[str] = None) -> str:
+    """Why the configured pause key is unusable, or "" when it is fine.
+
+    "" for a good key. "empty" while the slot is empty (the switch is disabled: normal for dev builds, wrong for a
+    release). A readable message when the slot holds something that is not a good Ed25519 key (wrong length, not
+    lowercase hex, not on the curve, or not in the prime-order subgroup): nobody could ever sign a valid pause, so
+    this is a release mistake. Information only: this never changes consensus or the rules fingerprint; it is for the
+    startup warning and the /status flag. Cached per value (the subgroup check is a few milliseconds)."""
+    pubkey = PAUSE_PUBKEY if pubkey is None else pubkey
+    if not pubkey:
+        return "empty"
+    if not isinstance(pubkey, str):
+        return "PAUSE_PUBKEY is not text"
+    hit = _KEY_PROBLEM_CACHE.get(pubkey)
+    if hit is None:
+        try:
+            ok = is_valid_pubkey_hex(pubkey)
+        except Exception:                     # never let a diagnostic take the node down
+            ok = False
+        hit = "" if ok else ("PAUSE_PUBKEY is not a valid Ed25519 public key (needs 64 lowercase hex characters that "
+                             "pass the curve and prime-order-subgroup check): no pause could ever be accepted")
+        if len(_KEY_PROBLEM_CACHE) < 64:
+            _KEY_PROBLEM_CACHE[pubkey] = hit
+    return hit
 
 
 def is_pause_tx(tx) -> bool:
@@ -68,16 +125,23 @@ def make_pause_tx(private_key_hex: str, paused: bool, reason: str, nonce: int, c
             "pubkey": pub, "sig": sig}
 
 
-def valid_pause_tx(tx: dict, expected_nonce: int, chain_id: str, pubkey: Optional[str] = None) -> bool:
+def signed_by_pause_key(tx: dict, chain_id: str, pubkey: Optional[str] = None) -> Optional[dict]:
+    """The normalized tx if it is well formed, carries the pause key and has a valid signature for this chain; else
+    None. Looks at no chain data, so it is cheap: check this BEFORE anything that scans the chain."""
     pubkey = PAUSE_PUBKEY if pubkey is None else pubkey
     try:
         tx = normalize_pause_tx(tx)
     except (ValueError, TypeError):
-        return False
-    if not pubkey or tx["pubkey"] != pubkey.lower() or tx["nonce"] != expected_nonce:
-        return False
+        return None
+    if not pubkey or tx["pubkey"] != pubkey.lower():
+        return None
     msg = pause_message(pause_payload(tx["paused"], tx["reason"], tx["nonce"], chain_id))
-    return verify_signature(tx["pubkey"], tx["sig"], msg)
+    return tx if verify_signature(tx["pubkey"], tx["sig"], msg) else None
+
+
+def valid_pause_tx(tx: dict, expected_nonce: int, chain_id: str, pubkey: Optional[str] = None) -> bool:
+    signed = signed_by_pause_key(tx, chain_id, pubkey)
+    return signed is not None and signed["nonce"] == expected_nonce
 
 
 def _active(on: Optional[int], height: int, expiry: int) -> bool:

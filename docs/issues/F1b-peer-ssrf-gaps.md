@@ -1,6 +1,6 @@
 # F1b: Peer-URL SSRF gaps after F1 (R1-R3)
 
-**Severity:** High (R1), Medium (R2, R3). **Status:** fixed on the `review-fixes` branch, local commit not yet pushed.
+**Severity:** High (R1), Medium (R2, R3). **Status:** fixed in PR #1 (e90c938), merged into `release-5000` as c34e639. Follow-up: F9.
 
 The F1 fix only gated the `/receive_block` sync trigger. The second review found three more routes:
 

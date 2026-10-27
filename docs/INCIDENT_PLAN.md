@@ -55,7 +55,7 @@ the public log.
 
 ## The pause switch (design)
 
-Goal: one person (the project key holder) can halt epoch payouts quickly while something is
+Goal: one person (the founder) can halt epoch payouts quickly while something is
 investigated. Nothing hidden, no special power over coins.
 
 * **On-chain and public.** A pause is a signed transaction in a block, so every
@@ -71,14 +71,14 @@ investigated. Nothing hidden, no special power over coins.
 * **Behind a flag twice:** consensus only accepts pause txs from height 5000
   (`SECURITY_FORK_HEIGHT`), and the whole feature is off while
   `PAUSE_PUBKEY = ""`, which is the default in this branch.
-* **Operating it:** on an offline machine, `python ops/pause_tx.py pause "reason" --nonce N`
+* **Operating it:** on an offline machine, `python ops/pause_tx.py pause "reason" --nonce N --chain-id netlithic-dev-1` (the flag is required; a practice run uses `--chain-id netlithic-drill`)
   (the key is typed at a hidden prompt), then POST the printed JSON to any
   node's `/submit_tx`. To resume, use `resume` with the next nonce. To keep a pause past 10,080 blocks (~7 days), send `renew` before it lapses.
 
 ### Pause key status
-1. Generate the pause keypair offline ([PAUSE_KEY_CEREMONY.md](PAUSE_KEY_CEREMONY.md)) and set `PAUSE_PUBKEY` in `pause.py` before 5000.
-2. No back pay. Skipped epochs stay in the pool (verified by test).
-3. A pause expires automatically 10,080 blocks (~7 days at 60 s; set 2026-10-23, was 1008) after its last pause/renew tx,
+1. Generate the pause keypair offline ([PAUSE_KEY_CEREMONY.md](PAUSE_KEY_CEREMONY.md)) and hand over the PUBLIC key; it is set in `pause.py` with `ops/set_pause_pubkey.py` and ships in 0.5.1, before block 4900.
+2. **Decided:** no back pay. Skipped epochs stay in the pool (verified by test).
+3. **Decided:** a pause expires automatically 10,080 blocks (~7 days at 60 s; set 2026-10-23, was 1008) after its last pause/renew tx,
    unless publicly renewed by another signed pause tx (logged as "renew"). Skipped payouts are
    never back-paid; the coins stay in the community pool, so the next paying epoch's earners split
    a larger pool (each still capped at 25k).
@@ -87,3 +87,6 @@ investigated. Nothing hidden, no special power over coins.
 
 Write a public post-mortem within a week covering the timeline, root cause,
 what changed, and how we'll catch it next time. Add a regression test.
+
+### Findings from the 2026-10-23 drill
+See [PAUSE_DRILL_2026-10-23.md](PAUSE_DRILL_2026-10-23.md). Short version: (1) the switch is off in the shipped release until a build with the real `PAUSE_PUBKEY` is running everywhere, and adding the key later is a fork; (2) mine the pause at least one block before the payout block; (3) after sending, confirm `/pause_status` on two or more nodes; (4) key rotation invalidates old blocks that contain pauses and needs a design; (5) expiry after 10,080 blocks is fail-open.

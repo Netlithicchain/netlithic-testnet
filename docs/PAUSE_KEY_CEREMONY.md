@@ -23,20 +23,31 @@ the **public key**.
 4. **Write the private key down** on paper twice, carefully. Read it back
    character by character. Stamp or engrave it on the metal plate if you have one.
 5. **Write down the public key** separately, labelled "PAUSE PUBLIC KEY".
-6. **Test once, still offline.** Run `python3 ops/pause_tx.py pause "test" --nonce 1`,
+6. **Test once, still offline.** Run `python3 ops/pause_tx.py pause "test" --nonce 1 --chain-id netlithic-drill`
+   (the `--chain-id` part is required; never use the real chain name for a test),
    type the private key at the hidden prompt, and check that the printed `"pubkey"` equals
    your public key. Do not broadcast it.
 7. **Wipe:** delete any file holding the private key, empty the trash, and clear the
    terminal history (`history -c`). Better still, never save it to a file.
 8. **Store the backups** in two separate safe places (e.g. a home safe and a bank box).
    Never photograph them. Never type them into a phone, chat, email or cloud.
-9. **Hand over only the public key:** paste the PUBLIC key into the PR or chat as
-   `PAUSE_PUBKEY = "..."`. It is safe to share.
+9. **Hand over only the public key:** paste the PUBLIC key (64 hex characters) into the chat. It is safe to
+   share. A helper puts it into `pause.py` with `python ops/set_pause_pubkey.py <public key>` (never by hand),
+   reads the key and its short **key id** back to you, and you compare both with your paper copy character by
+   character. Nobody ever needs the private key.
+
+## Practise first (no real key involved)
+
+`python ops/drill/pause_drill.py` runs a full pause, renew, resume and expiry on a private test chain with a
+throwaway key it creates and throws away. It also shows that a node with an empty key (0.5.0) rejects the pause
+block. Run it any time; it touches nothing real.
 
 ## Using it later
 
 Pausing needs the offline computer and the paper key. Sign the pause, renew, or
-resume tx offline with `ops/pause_tx.py`, carry the signed tx over on USB, and
+resume tx offline with `ops/pause_tx.py` (always with `--chain-id netlithic-dev-1` for a real one), carry the signed tx over on USB, and
 broadcast it. A pause ends by itself after 10,080 blocks (about 7 days) unless you renew it.
 
-If the private key is ever lost or exposed, set a new `PAUSE_PUBKEY` in a new release.
+If the private key is ever lost or exposed, set a new `PAUSE_PUBKEY` in a new release
+(`ops/set_pause_pubkey.py --force`); every node must upgrade to it, because nodes with different keys split.
+Anyone can compare the `pause_key_id` in `/status` with the one you published.

@@ -3,7 +3,7 @@
     python explorer.py --node http://127.0.0.1:8000 --port 8081
 
 Pages: / (latest blocks + summary), /block/<height|hash>, /tx/<id>,
-/address/<address>, /economy, /search?q=..., /static/netlithic-icon.png.
+/address/<address>, /economy, /registry, /search?q=..., /static/netlithic-icon.png.
 Only GETs public node endpoints (/status, /chain, /balance, /contributions,
 /mempool). Every value is HTML-escaped before it is shown.
 """
@@ -19,7 +19,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request
-from netutil import urlopen
+from netutil import urlopen, is_public_ip
 
 from node_pool import DEFAULT_FALLBACK, NodePool, parse_nodes
 
@@ -30,6 +30,11 @@ import economics  # noqa: E402
 import netlithic_version  # noqa: E402
 MAX_POLLED_NODES = 50
 MAX_STATUS_BYTES = 256 * 1024
+ALLOW_PRIVATE_PEERS = os.environ.get("NETLITHIC_ALLOW_PRIVATE_PEERS", "") == "1"  # local test setups only
+
+
+def _peer_ip_allowed(ip) -> bool:
+    return ALLOW_PRIVATE_PEERS or is_public_ip(ip)
 from core import tx_id  # noqa: E402
 
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
@@ -87,7 +92,10 @@ class NodeReader:
             if not isinstance(peer, str) or peer in out:
                 continue
             try:
-                with urlopen(Request(peer.rstrip("/") + "/status"), timeout=timeout) as r:
+                # Review F9: peer URLs come from another node, so the address the
+                # socket actually connects to must be public (same check as p2p_http).
+                with urlopen(Request(peer.rstrip("/") + "/status"), timeout=timeout,
+                             allow_ip=_peer_ip_allowed) as r:
                     out[peer] = json.loads(r.read(MAX_STATUS_BYTES))
             except Exception:
                 out[peer] = None
@@ -236,7 +244,7 @@ def page(title, body):
 <link rel="icon" href="/static/netlithic-icon.png"><style>{CSS}</style></head><body>
 <div class="banner">Testnet: coins have no value</div>
 <header><a href="/"><img src="/static/netlithic-icon.png" alt="Netlithic"></a>
-<a class="brand" href="/">Netlithic Explorer</a><nav><a href="/">Blocks</a><a href="/economy">Economy</a><a href="/leaderboard">Leaderboard</a><a href="/founder">Founder</a></nav>
+<a class="brand" href="/">Netlithic Explorer</a><nav><a href="/">Blocks</a><a href="/economy">Economy</a><a href="/leaderboard">Leaderboard</a><a href="/registry">Registry</a><a href="/founder">Founder</a></nav>
 <form action="/search" method="get"><input name="q" placeholder="Block height, block hash, tx id or address" maxlength="80">
 <button>Search</button></form></header><main>{body}</main>
 <footer class="small">Netlithic Explorer {e(netlithic_version.VERSION)}</footer></body></html>"""
@@ -362,6 +370,12 @@ class Explorer:
             rows.append(("Locked / vesting", e(bal["locked_or_unvested_nlt"]) + " NLT"))
         rows.append(("Contribution points", e(cp.get("cp", "0"))))
         try:
+            reg = self.r.get(f"/registry?address={quote(addr)}").get("address") or {}
+        except Exception:
+            reg = {}
+        if reg.get("why"):
+            rows.append(("Transfer points (registered list)", e(reg["why"])))
+        try:
             pay = self.r.get(f"/payouts?address={quote(addr)}")
         except Exception:
             pay = {}
@@ -372,6 +386,15 @@ class Explorer:
                      ("Points this reward period", e(pay.get("points_this_epoch", "0")))]
         if cp:
             rows.append(("Blocks mined", e(cp.get("blocks_mined", 0))))
+        try:
+            why = self.r.get(f"/points_explain?address={quote(addr)}")
+        except Exception:
+            why = {}
+        why_html = ""
+        if isinstance(why, dict) and why.get("why_zero"):
+            why_html = ("<h2>Why some activity earned 0 points</h2><ul>"
+                        + "".join(f"<li>{e(line)}</li>" for line in why["why_zero"][:10])
+                        + "</ul><p class='muted'>Counted for the current reward period only.</p>")
         txs = []
         for b in self.r.chain():
             for tx in b.get("transactions", []):
@@ -394,8 +417,47 @@ class Explorer:
                 items.append(f"<li>{what}, on the way{link}</li>")
             pend = ("<h2>On the way</h2><ul>" + "".join(items) + "</ul><p class='muted'>These transfers will be added "
                     "in the next block. The balance above only counts coins that have arrived. Test coins have no value.</p>")
-        body = f"<h1>Address</h1>{kv_table(rows)}{pend}<h2>Activity (latest 100)</h2>" + tx_rows(list(reversed(txs))[:100], height=True)
+        body = f"<h1>Address</h1>{kv_table(rows)}{why_html}{pend}<h2>Activity (latest 100)</h2>" + tx_rows(list(reversed(txs))[:100], height=True)
         return "Address", body
+
+    def registry(self):
+        """The registered-contributors list (TEMPORARY and CENTRALIZED): who earns transfer points, and what is pending."""
+        try:
+            d = self.r.get("/registry")
+        except Exception:
+            d = {}
+        if not isinstance(d, dict) or "mode" not in d:
+            return "Registry", "<h1>Registered contributors</h1><div class='err'>The node does not offer the registry list.</div>"
+        rows = [("Mode", e(d.get("mode"))),
+                ("Signing key", e(d.get("key_id") or "not set yet")),
+                ("Active", e(d.get("active_count"))), ("Waiting one day", e(d.get("pending_count"))),
+                ("Waiting period", e(d.get("delay_blocks")) + " blocks"),
+                ("Max additions per reward period", e(d.get("max_adds_per_period"))),
+                ("Added this period", e(d.get("adds_this_period"))),
+                ("Ends at block", e(d.get("sunset_height") if d.get("sunset_height") is not None else "no end date set"))]
+        body = ("<h1>Registered contributors</h1>"
+                f"<div class='err'><b>Temporary and centralized.</b> {e(d.get('note'))} {e(d.get('test_coins_note'))}</div>"
+                + kv_table(rows))
+
+        def table(items, cols):
+            out = ["<table><tr>" + "".join(f"<th>{e(c)}</th>" for c, _ in cols) + "</tr>"]
+            for it in items:
+                out.append("<tr>" + "".join(f"<td>{f(it)}</td>" for _, f in cols) + "</tr>")
+            if len(out) == 1:
+                out.append(f'<tr><td colspan="{len(cols)}" class="muted">Nobody</td></tr>')
+            return "".join(out) + "</table>"
+        body += "<h2>Pending additions (not earning yet)</h2>" + table(d.get("pending", []), [
+            ("Address", lambda x: addr_link(x["address"])), ("Added at block", lambda x: e(x["added_at_height"])),
+            ("Starts counting at block", lambda x: e(x["earns_from_height"])),
+            ("Blocks to wait", lambda x: e(x["blocks_until_active"]))])
+        body += "<h2>Active (earning transfer points)</h2>" + table(d.get("active", []), [
+            ("Address", lambda x: addr_link(x["address"])), ("Added at block", lambda x: e(x["added_at_height"]))])
+        body += "<h2>Recent updates (public log)</h2>" + table(list(reversed(d.get("log", [])))[:25], [
+            ("Block", lambda x: e(x["height"])), ("Added", lambda x: e(len(x["adds"]))),
+            ("Removed", lambda x: e(len(x["removes"]))), ("Reason", lambda x: e(x["reason"]))])
+        body += ("<p class='muted'>Mining points are open to everyone. To ask for a place on the list, see the sign-up "
+                 "steps in docs/POINTS_V4_REGISTRY.md.</p>")
+        return "Registry", body
 
     def economy(self):
         st = self.r.status()
@@ -439,12 +501,13 @@ class Explorer:
             body += "<tr><td colspan='5' class='muted'>No points yet this period.</td></tr>"
         body += "</table>"
         body += ("<h2>How points are earned</h2><ul>"
-                 f"<li>Mine a block that carries at least one real transfer: {e(rules.get('per_block_with_transfers', '2.5'))} points.</li>"
+                 f"<li>Mine a block: {e(rules.get('per_block_with_transfers', '2.5'))} points.</li>"
                  f"<li>Send a transfer of at least {e(rules.get('min_transfer_nlt', '1'))} test NLT to someone else: "
                  f"{e(rules.get('per_transfer_sent', '1'))} point.</li></ul>"
                  "<h2>Fair-play rules</h2><ul>"
                  "<li>Sending coins to yourself earns 0 points.</li>"
-                 "<li>Empty blocks (no transfers, or only the miner sending to itself) earn 0 points.</li>"
+                 "<li>Mining points follow the number of blocks you mine. Before block 5000, empty blocks earned 0; from block 5000 every mined block counts, "
+                 "because the empty-block rule was too easy to get around. One miner using many addresses still gets about his share of the blocks.</li>"
                  f"<li>Each sender-and-recipient pair counts for at most {e(rules.get('pair_cap_per_epoch', 10))} "
                  "transfers per reward period.</li>"
                  "<li>Points are worked out from the chain by every node, so nobody can edit them.</li></ul>"
@@ -576,6 +639,8 @@ def make_handler(explorer, base_path=""):
                 if parts == ["leaderboard"]:
                     sh = (parse_qs(u.query).get("short") or [""])[0] == "1"
                     return self.send(200, page(*explorer.leaderboard(sh)))
+                if parts == ["registry"]:
+                    return self.send(200, page(*explorer.registry()))
                 if parts == ["founder"]:
                     return self.send(200, page(*explorer.founder()))
                 if parts == ["search"]:

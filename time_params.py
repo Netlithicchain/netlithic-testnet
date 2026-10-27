@@ -1,8 +1,8 @@
-"""PROPOSAL pending founder approval -- NOT ACTIVE. Time-based values for block-count rules.
+"""Time-based values for the block-count rules (approved 2026-10-23 and now set in the modules).
 
 Before 2026-10-23 every rule was a block count (100-block reorg limit, 1008-block pause expiry,
-144-block address wait and testnet payout epoch). Before block 5000 the chain makes
-~1 block per 10 minutes (founder timer), after it LWMA targets 60 s. The same block
+144-block address wait and testnet payout epoch). Pause expiry is now 10,080 blocks (~7 days).
+Before block 5000 the chain makes ~1 block per 10 minutes (founder timer), after it LWMA targets 60 s. The same block
 count therefore means very different real time before and after the fork.
 These constants state each rule as a time and convert it at the 60 s target.
 Nothing in core/pause/contributions/economics reads this module yet; apply() exists

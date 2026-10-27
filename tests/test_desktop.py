@@ -251,7 +251,7 @@ def test_app_starts_and_writes_log(tmp_path):
         assert ok, proc.stdout.read().decode() if proc.poll() is not None else "no answer"
     finally:
         proc.terminate(); proc.wait(15)
-    assert "starting 0.5.0 (frozen=False" in (tmp_path / "netlithic.log").read_text()
+    assert "starting 0.5.3 (frozen=False" in (tmp_path / "netlithic.log").read_text()
 
 
 def test_parent_alive_and_watchdog():

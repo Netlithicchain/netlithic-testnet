@@ -1,5 +1,11 @@
 # Block-time audit
 
+> **Historical (2026-10-23, morning).** This audit found the old block counts were wrong for 60 s blocks. the founder then
+> approved the fixes, and they are in the code now: pause expiry **10,080** blocks (~7 days; it was 1,008), reorg limit
+> **720**, testnet payout period **1,440**, new-address wait **1,440**. The 1,008 / 100 / 144 numbers below are the
+> *old* values, kept to show the reasoning. Current values: `pause.PAUSE_EXPIRY_BLOCKS`, `core.MAX_REORG_DEPTH`,
+> `economics.TESTNET_SHORT_EPOCHS`, `contributions.MIN_ADDRESS_AGE_BLOCKS`.
+
 Data: public explorer pages `https://testnet.netlithicchain.com/explorer/block/N`, blocks 1-434,
 read 2026-10-23 12:48 UTC (6:48 AM MT). Height then: 434.
 

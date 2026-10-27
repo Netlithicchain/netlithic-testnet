@@ -59,7 +59,7 @@ def test_leaderboard_page(played):
         base = f"http://127.0.0.1:{srv.server_address[1]}/explorer"
         full = urllib.request.urlopen(base + "/leaderboard").read().decode()
         assert bob.address in full and "test coins have no value" in full.lower()
-        assert "yourself earns 0" in full and "Empty blocks" in full and "at most 10" in full
+        assert "yourself earns 0" in full and "every mined block counts" in full and "at most 10" in full
         assert 'href="/explorer/leaderboard"' in full or "href='/explorer/leaderboard" in full
         shortp = urllib.request.urlopen(base + "/leaderboard?short=1").read().decode()
         assert bob.address[:8] + "..." in shortp and f">{bob.address}<" not in shortp

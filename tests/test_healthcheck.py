@@ -8,6 +8,8 @@ Disk = namedtuple("Disk", "total used free")
 
 def cfg(**kw):
     c = H.load_config(None)
+    c["checkpoints_file"] = ""
+    c["expected_pause_key_id"] = "2a83f37a4ce7a269"
     c.update(kw)
     return c
 
@@ -16,11 +18,16 @@ def fetcher(heights, faucet=1000):
     def fetch(url):
         if url.endswith("/api/info"):
             return {"balance_nlt": str(faucet)}
+        if url.endswith("/chain"):
+            return {"chain": [{"index": 0, "hash": "g"}]}
+        if url.endswith("/pause_status"):
+            return {"paused": False, "expired": False}
         for node, h in heights.items():
             if url.startswith(node):
                 if h is None:
                     raise OSError("down")
-                return {"height": h}
+                return {"height": h, "version": "0.5.3", "fork_ready": True, "latest_hash": f"h{h}",
+                        "pause_key_id": "2a83f37a4ce7a269"}
         raise OSError("unknown")
     return fetch
 

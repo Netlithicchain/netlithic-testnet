@@ -11,8 +11,8 @@ value, kept in V3_TX_POT). Part 3 compares what v3 would pay with what v4 pays, 
   v3+fam    as v3 with the funding-family rule ON (faucet configured as the issuer)
   v4        20% / 80% pots, 2% of each pot per address, family rule OFF (the shipped v4 settings)
 The one-day payout lag changes WHEN a period is paid, not how much, so it does not appear in these amounts.
-Part 4 (registry) compares v4 with v4 + the registered-contributors option (TEMPORARY, CENTRALIZED, see
-docs/POINTS_V4_REGISTRY.md): only SENDERS on the list earn transfer points, mining points stay open. The list is applied in
+Part 4 (registry) compares v4 with v4 + the registered-contributors option (TEMPORARY, CENTRALIZED):
+only SENDERS on the list earn transfer points, mining points stay open. The list is applied in
 the simulator as "this set of senders is listed for the whole period" (the one-day delay has passed; the real delay and
 removal rules are tested in tests/test_registry.py).
 Part 5 (mining) is the honest answer to "does the 2% cap protect the mining pot?": it does not. The mining pot follows

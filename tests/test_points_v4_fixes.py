@@ -134,7 +134,7 @@ def test_h1_simulator_empty_block_case_old_rule_pays_the_trick_and_the_fix_does_
 
 
 def test_h1_docs_do_not_claim_the_split_protects_the_pool():
-    doc = open(os.path.join(ROOT, "docs", "POINTS_V4.md")).read()
+    doc = read_private_doc("docs", "POINTS_V4.md")
     assert "do **not** protect the mining pot" in doc
     assert "block share" in doc
 
@@ -312,7 +312,7 @@ def test_h2_a_thief_holding_the_current_key_cannot_be_locked_out_by_rotation_alo
                                                         new_key=registry.pubkey_from_private(thief_new),
                                                         new_key_private=thief_new), h + 60, CID)
     assert st.key_at(h + 60 + 1440) == registry.pubkey_from_private(thief_new)
-    doc = open(os.path.join(ROOT, "docs", "POINTS_V4_REGISTRY.md")).read()
+    doc = read_private_doc("docs", "POINTS_V4_REGISTRY.md")
     assert "break-glass" in doc and "hard fork" in doc
 
 

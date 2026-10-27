@@ -1,4 +1,4 @@
-> **Superseded by [POINTS_V4.md](POINTS_V4.md)** (20/80 pots, 2% per-address cap, one-day payout lag; first payout at 7880, family rule off). v3 never shipped. This page stays as the history of the v3 design; the numbers below (30/70, first payout at 6440, `POINTS_V3_HEIGHT`) are the old ones.
+> **Superseded by points v4** (20/80 pots, 2% per-address cap, one-day payout lag; first payout at 7880, family rule off). v3 never shipped. This page stays as the history of the v3 design; the numbers below (30/70, first payout at 6440, `POINTS_V3_HEIGHT`) are the old ones.
 
 # Points v3 (consensus rules for payouts at height >= `core.POINTS_V3_HEIGHT` = 5000)
 

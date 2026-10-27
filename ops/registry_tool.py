@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Registry tool: keep the TEMPORARY, CENTRALIZED registered-contributors list (docs/POINTS_V4_REGISTRY.md).
+"""Registry tool: keep the TEMPORARY, CENTRALIZED registered-contributors list.
 
     python ops/registry_tool.py --check                      release gate: exit 1 while the REGISTRY_PUBKEY slot is empty
     python ops/registry_tool.py --status                     show the slot, always exit 0

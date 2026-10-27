@@ -52,7 +52,7 @@ MAX_BASE_PER_POINT: Optional[int] = None   # review M2: optional ceiling on NLT 
 # issuer list and the tests stay so a later announced fork can switch it on. See docs/POINTS_V3.md "Recommendation".
 FAMILY_RULE_ENABLED = False
 FAMILY_PAIR_CAP: Optional[int] = None      # transfer points per (sender family, recipient family) pair per period; None = off
-# ---- Points v4 (same fork height as v3; v3 never shipped, v4 replaces it; see docs/POINTS_V4.md) ----
+# ---- Points v4 (same fork height as v3; v3 never shipped, v4 replaces it) ----
 TX_POT_PERCENT = 20        # share of each period's release paid for transfers; the other 80% is the mining pot (v3 proposed 30)
 POT_CAP_PERCENT = 2        # one address can take at most this % of EACH pot per period (floor, in base units); None = off
 PAYOUT_LAG_PERIODS = 1     # payout for period N is paid in the block that ends period N+1 (1,440 blocks later); 0 = old v3 timing
@@ -260,7 +260,7 @@ def points_from_blocks(
     Returns {address: {cp_tenths, cp, blocks_mined, empty_blocks, tx_count, point_tx_count}}.
     tx_count counts every transfer sent; point_tx_count only those that earned points.
     v3 (with `roots` from family_roots): transfers between addresses of one funding family earn nothing.
-    registry (registered-contributors option, docs/POINTS_V4_REGISTRY.md): a function (sender, height) -> bool. A transfer
+    registry (registered-contributors option): a function (sender, height) -> bool. A transfer
     whose sender it refuses earns nothing and uses up none of the caps. None = open (no registry).
     flat_block_points_height (points v4 fix H1): from this height on EVERY mined block earns the block points. The old
     "empty self-mined block earns 0" discount cannot be enforced (one 1-base-unit transfer to another own address

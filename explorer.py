@@ -455,8 +455,8 @@ class Explorer:
         body += "<h2>Recent updates (public log)</h2>" + table(list(reversed(d.get("log", [])))[:25], [
             ("Block", lambda x: e(x["height"])), ("Added", lambda x: e(len(x["adds"]))),
             ("Removed", lambda x: e(len(x["removes"]))), ("Reason", lambda x: e(x["reason"]))])
-        body += ("<p class='muted'>Mining points are open to everyone. To ask for a place on the list, see the sign-up "
-                 "steps in docs/POINTS_V4_REGISTRY.md.</p>")
+        body += ("<p class='muted'>Mining points are open to everyone. To ask for a place on the list, ask the project "
+                 "founder.</p>")
         return "Registry", body
 
     def economy(self):

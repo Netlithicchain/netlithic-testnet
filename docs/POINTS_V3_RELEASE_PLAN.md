@@ -1,4 +1,4 @@
-> **Superseded by [POINTS_V4.md](POINTS_V4.md).** Same idea (ship inside 0.5.1), but the shipped rules are the v4 ones and the first payout moves to block 7880. Kept for the reasoning on timing and the min-peer gate.
+> **Superseded by points v4.** Same idea (ship inside 0.5.1), but the shipped rules are the v4 ones and the first payout moves to block 7880. Kept for the reasoning on timing and the min-peer gate.
 
 # Points v3: how it ships with 0.5.1, and the min-peer gate
 

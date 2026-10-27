@@ -397,7 +397,7 @@ def miner_share_problems(miners, threshold_pct=40, min_blocks=50, funders=None, 
 
     Honest limits: this catches a miner that spreads blocks over several addresses it has moved coins between. A miner
     who never links its addresses on chain looks like several small miners and is NOT caught. Because the mining pot
-    follows block share (docs/POINTS_V4.md), a high block share is the thing to watch, however many addresses it uses.
+    follows block share, a high block share is the thing to watch, however many addresses it uses.
     Addresses in `ignore` (the founder's own miners) are left out of the count."""
     ignore = set(ignore or ())
     miners = [m for m in miners if m not in ignore]

@@ -1,4 +1,4 @@
-"""Registered contributors for the transfer pot (TEMPORARY and CENTRALIZED; see docs/POINTS_V4_REGISTRY.md).
+"""Registered contributors for the transfer pot (TEMPORARY and CENTRALIZED).
 
 Test coins have no value. This module decides ONE thing: which senders may earn *transfer* points. Mining points
 are open to everybody and are never touched by anything in here.
@@ -33,7 +33,7 @@ How it works (all of it is consensus: every node derives the same answer from th
     a copy mistake) can never be installed, and the new key must be a real Ed25519 public key (on the curve, canonical,
     not of small order; all-zero and the identity point are refused).
     A rotation cannot protect against a thief who holds the current key as well (there is no second authority on chain):
-    for that, the pause switch stops payouts and the break-glass plan is a coordinated fork (docs/POINTS_V4_REGISTRY.md).
+    for that, the pause switch stops payouts and the break-glass plan is a coordinated fork.
   * Every update carries "valid_until" (a block height). A block above it cannot carry the update, so a miner cannot sit
     on a signed update and mine it much later. valid_until may be at most REGISTRY_MAX_VALID_BLOCKS (10,080) above the
     height of the block that carries the update, so a huge value cannot switch the expiry off.

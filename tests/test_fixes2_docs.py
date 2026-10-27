@@ -2,11 +2,13 @@
 import glob
 import os
 
+from conftest import read_private_doc
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _read(name):
-    return open(os.path.join(ROOT, "docs", name), encoding="utf-8").read()
+    return read_private_doc("docs", name)     # skipped in the public repo when the doc is kept private
 
 
 def test_f5_registry_enabled_false_is_a_hard_fork_after_launch():

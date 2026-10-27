@@ -128,7 +128,7 @@ def test_cap_is_floor_of_two_percent_per_pot_and_the_sum_never_exceeds_the_budge
     assert all(v <= mine_budget * 2 // 100 + tx_budget * 2 // 100 for v in out.values())
 
 
-# ---- self-stuffing: deliberately NOT fixed (see docs/POINTS_V4.md) ----
+# ---- self-stuffing: deliberately NOT fixed ----
 
 def test_self_stuffing_between_own_addresses_still_earns_transfer_points_but_only_inside_the_20_percent_pot():
     me, mine2 = addr(7), addr(8)

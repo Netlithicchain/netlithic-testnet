@@ -87,6 +87,3 @@ investigated. Nothing hidden, no special power over coins.
 
 Write a public post-mortem within a week covering the timeline, root cause,
 what changed, and how we'll catch it next time. Add a regression test.
-
-### Findings from the 2026-10-23 drill
-See [PAUSE_DRILL_2026-10-23.md](PAUSE_DRILL_2026-10-23.md). Short version: (1) the switch is off in the shipped release until a build with the real `PAUSE_PUBKEY` is running everywhere, and adding the key later is a fork; (2) mine the pause at least one block before the payout block; (3) after sending, confirm `/pause_status` on two or more nodes; (4) key rotation invalidates old blocks that contain pauses and needs a design; (5) expiry after 10,080 blocks is fail-open.

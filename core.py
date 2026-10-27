@@ -54,7 +54,7 @@ POW_LIMIT = 2 ** 256
 # anti-farming v2 for points. See docs/THREAT_MODEL.md and docs/CONFIRMATIONS.md.
 SECURITY_FORK_HEIGHT = 5000
 POINTS_V4_HEIGHT = SECURITY_FORK_HEIGHT   # THE announced fork height for the points rules: slow release, 20/80 pots, 2% per-address cap, one-day payout lag.
-# (v3 never shipped; v4 replaces it at the same height. Everything that changes at 5000 is listed in docs/POINTS_V4.md.)
+# (v3 never shipped; v4 replaces it at the same height.)
 # Same height as the security fork on purpose: the live leaderboard then shows the rules that will actually pay. Under v4 the
 # first payout is at 7880 (6440 pays nothing); a node on plain 0.5.1 rules would pay at 6440 and split there.
 MAX_REORG_DEPTH = 720              # node policy from 5000: never roll back more than this (~12 h at 60 s; set 2026-10-23)
@@ -707,7 +707,7 @@ class Blockchain:
             elif e is None:
                 out["address"] = {"address": address, "earns_transfer_points": False, "status": "not_listed",
                                   "why": "Not on the list. Transfers you send earn no points; mining points still count. "
-                                         "See docs/POINTS_V4_REGISTRY.md to ask for a place on the list."}
+                                         "Ask the project founder for a place on the list."}
             elif e["status"] == "pending":
                 out["address"] = {"address": address, "earns_transfer_points": False, "status": "pending",
                                   "earns_from_height": e["earns_from_height"],

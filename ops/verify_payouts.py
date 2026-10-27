@@ -25,7 +25,7 @@ It only ever sends GET requests to the node you name; it writes nothing and need
 WHAT IS AND IS NOT INDEPENDENT (printed with every run, see LIMITS): the points, pots, caps and budget arithmetic are
 reimplemented here. These pieces are shared with the node's code and are NOT independent: the registry list (read with
 registry.scan), the economics settings (config/genesis_config.json), the signature primitive, and (unless --quick) the
-chain validator. This tool cannot see a multi-address miner: the mining pot follows block share (docs/POINTS_V4.md).
+chain validator. This tool cannot see a multi-address miner: the mining pot follows block share.
 
 Exit code: 0 = nothing odd, 1 = something to look at, 2 = could not check (including a chain that fails its checks).
 Test coins have no value. This tool says nothing about price or returns.
@@ -67,7 +67,7 @@ LIMITS = [
     "that each hash meets the difficulty the block itself declares. A made-up history that matches the shipped "
     "checkpoints (or any block after the last checkpoint) can pass it. Use it only to look around, never to rely on a period.",
     "It cannot tell one miner from several: the mining pot follows block share, and the 2% cap does not stop a miner "
-    "who uses many addresses (docs/POINTS_V4.md). Watch the miner-share alert in ops/healthcheck.py for that.",
+    "who uses many addresses. Watch the miner-share alert in ops/healthcheck.py for that.",
     "It cannot tell whether a registry entry is a good one. It only shows what the list is.",
     "It checks one period at a time, from the chain the node gave it. If the node hides the newest blocks, the "
     "paid-versus-recomputed check for a recent period is skipped, not failed.",

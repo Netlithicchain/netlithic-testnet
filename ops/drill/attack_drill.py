@@ -1,4 +1,4 @@
-"""Private local 51% / deep-reorg drill. Box only: no network, no real wallets.
+"""Private local 51% / deep-reorg drill. Runs locally: no network, no real wallets.
 
 Runs several independent Blockchain node instances in a throwaway directory,
 lets an honest miner build a chain that all nodes accept, then has a majority

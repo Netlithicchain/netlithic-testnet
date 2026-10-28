@@ -1,4 +1,4 @@
-"""One-command PAUSE DRILL on a private, in-memory test chain. Box only: no network, no real keys.
+"""One-command PAUSE DRILL on a private, in-memory test chain. Runs locally: no network, no real keys.
 
     python ops/drill/pause_drill.py
 

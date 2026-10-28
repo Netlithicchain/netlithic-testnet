@@ -1,4 +1,4 @@
-"""Registered contributors for the transfer pot (TEMPORARY, centralized). Box only; throwaway keys made in the tests.
+"""Registered contributors for the transfer pot (TEMPORARY, centralized). Runs locally only; throwaway keys made in the tests.
 
 Part 1  the registry module on its own (signatures, shape, delay, removal, limits)
 Part 2  real constants (fork 5000, 1,440-block period) on synthetic chains: who gets paid at 9320

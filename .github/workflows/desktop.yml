@@ -84,7 +84,7 @@ jobs:
             throw "Windows smoke test failed: the app did not serve its page."
           }
           Write-Host "Windows smoke test passed."
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: netlithic-${{ runner.os }}
           path: |

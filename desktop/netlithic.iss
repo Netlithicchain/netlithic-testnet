@@ -2,7 +2,7 @@
 [Setup]
 AppId={{6B1E5C2A-4F0D-4E7B-9C1A-0A1B2C3D4E5F}
 AppName=Netlithic (Test Network)
-AppVersion=0.5.0
+AppVersion=0.5.3
 AppPublisher=Netlithic
 DefaultDirName={localappdata}\Programs\Netlithic
 DefaultGroupName=Netlithic

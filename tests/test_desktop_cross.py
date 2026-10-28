@@ -35,3 +35,29 @@ def test_workflow_matrix_and_no_publish():
         assert os_ in wf
     assert "upload-artifact" in wf and "release" not in wf.lower().replace("releases/download", "")
     assert "--no-window" in wf
+
+
+def test_desktop_requirements_have_upper_bounds():
+    """An unbounded 'cryptography>=42' let a Python 3.15 build pull a wheel that needs
+    python3t.dll (not bundled) and the installer crashed on start-up. Keep every
+    desktop build dependency bounded so a new major version cannot slip in."""
+    lines = [l.strip() for l in read("desktop", "requirements-desktop.txt").splitlines()
+             if l.strip() and not l.strip().startswith("#")]
+    assert {l.split(">=")[0] for l in lines} >= {"cryptography", "pywebview", "pyinstaller", "pillow"}
+    for l in lines:
+        assert ">=" in l and "<" in l, f"{l!r} has no upper bound"
+
+
+def test_windows_build_uses_workflow_python_and_checks_it():
+    s = read("desktop", "build_windows.ps1")
+    assert "$env:pythonLocation" in s and "& $py -m venv" in s
+    assert "py -m venv" not in s.replace("& $py -m venv", "").replace('"py"', "")
+    assert "3.11-3.13" in s and r"^3\.(11|12|13)$" in s
+    assert "Library not found" in s  # a build that could not bundle a DLL must stop
+
+
+def test_workflow_has_windows_smoke_test():
+    wf = read(".github", "workflows", "desktop.yml")
+    assert "Smoke test (Windows)" in wf and "Netlithic.exe" in wf
+    assert "--no-window" in wf and "47190" in wf
+    assert "contents: read" in wf

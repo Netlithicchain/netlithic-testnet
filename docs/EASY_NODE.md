@@ -47,4 +47,4 @@ you, change the port line to `"8000:8000"` and set `ADVERTISE_URL` to your publi
 Nothing runs on the servers. Publish = put these files in the public download / repo; the
 seeds just receive normal peer syncs. The Desktop app remains the no-terminal option for
 most people; this is for people who want an always-on node. Mac/Windows service steps are
-written but only Linux was tested on a real machine (the box).
+written but only Linux was tested on a real machine.

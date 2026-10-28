@@ -171,6 +171,66 @@ def verify_signature(pubkey_hex: str, sig_hex: str, message: bytes) -> bool:
         return False
 
 
+# --- Ed25519 public key sanity check (shared by consensus in registry.py and by the ops tools) ---
+# The cryptography library accepts ANY 32 bytes as a public key. Some encodings are not real keys at all
+# (not on the curve, not canonical) and some are "small order" points (the identity point, for one) for which
+# a signature can be forged by anybody. Everything that installs a key must refuse those.
+# It also refuses points that carry a torsion part (L*P != identity): an honestly generated key A = a*B always has
+# L*A = identity, so such a point cannot be anybody's real key (the 0.5.3 candidate shipped one by a typo).
+# This function is used ONLY for the pause/registry key slots, the registry rotation key and their ops tools; it is not
+# used on wallet addresses, miner addresses or transaction senders, so ordinary accounts are not affected.
+_ED_P = 2 ** 255 - 19
+_ED_L = 2 ** 252 + 27742317777372353535851937790883648493
+_ED_D = -121665 * pow(121666, _ED_P - 2, _ED_P) % _ED_P
+
+
+def is_good_ed25519_point(raw: bytes) -> bool:
+    """True only for a canonical encoding of a point that is on the curve, is not of small order, and lies in the
+    prime-order subgroup (L * P is the identity)."""
+    if not isinstance(raw, (bytes, bytearray)) or len(raw) != 32:
+        return False
+    P, D = _ED_P, _ED_D
+    y = int.from_bytes(raw, "little")
+    sign, y = y >> 255, y & ((1 << 255) - 1)
+    if y >= P:
+        return False                      # non-canonical encoding of y
+    x2 = (y * y - 1) * pow(D * y * y + 1, P - 2, P) % P
+    x = pow(x2, (P + 3) // 8, P)
+    if (x * x - x2) % P:
+        x = x * pow(2, (P - 1) // 4, P) % P
+    if (x * x - x2) % P:
+        return False                      # no square root: not on the curve
+    if x == 0 and sign:
+        return False                      # non-canonical encoding of x = 0
+    if (x & 1) != sign:
+        x = P - x
+
+    def add(p1, p2):                      # twisted Edwards addition, affine
+        (x1, y1), (x2_, y2) = p1, p2
+        t = D * x1 * x2_ * y1 * y2 % P
+        return ((x1 * y2 + x2_ * y1) * pow(1 + t, P - 2, P) % P,
+                (y1 * y2 + x1 * x2_) * pow(1 - t, P - 2, P) % P)
+    pt = (x, y)
+    for _ in range(3):                    # 8 * P
+        pt = add(pt, pt)
+    if pt == (0, 1):
+        return False                      # 8P = identity means a low-order (weak) key
+    q, k, base = (0, 1), _ED_L, (x, y)    # L * P by double-and-add; identity means "no torsion part"
+    while k:
+        if k & 1:
+            q = add(q, base)
+        base = add(base, base)
+        k >>= 1
+    return q == (0, 1)
+
+
+def is_valid_pubkey_hex(key: str) -> bool:
+    """64 lowercase hex characters that are a good Ed25519 public key (see is_good_ed25519_point)."""
+    if not isinstance(key, str) or len(key) != 64 or any(c not in "0123456789abcdef" for c in key):
+        return False
+    return is_good_ed25519_point(bytes.fromhex(key))
+
+
 class Wallet:
     def __init__(self, name: str, private_key: str, pubkey: str):
         self.name = str(name)

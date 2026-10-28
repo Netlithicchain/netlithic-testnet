@@ -1,0 +1,5 @@
+{
+  "_readme": "TEMPORARY, CENTRALIZED list of registered contributors for the transfer pot. Public addresses only (32 hex characters). Never put a private key, seed phrase or password in this file. Edit it, then run: python ops/registry_tool.py verify ops/registry/registry_list.json",
+  "network": "netlithic-dev-1",
+  "entries": []
+}

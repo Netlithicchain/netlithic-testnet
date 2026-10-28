@@ -9,6 +9,11 @@ import pytest
 from conftest import TEST_ADMIN_TOKEN, free_port, post
 
 
+# Subprocess nodes run the shipped defaults (registry on), so the in-process node
+# must too, or the handshake rightly refuses a different rules fingerprint.
+pytestmark = pytest.mark.registry
+
+
 @pytest.fixture(autouse=True)
 def _isolated_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)

@@ -14,7 +14,7 @@ python -c "from PIL import Image; Image.open('webwallet/static/logo.png').conver
 pyinstaller --noconfirm --clean --windowed --name Netlithic \
   --add-data "config:config" --add-data "webwallet/static:webwallet/static" --add-data "desktop/static:desktop/static" \
   --hidden-import p2p_http --hidden-import node --hidden-import core --hidden-import economics \
-  --hidden-import contributions --hidden-import wallet --hidden-import webwallet --hidden-import node_pool --hidden-import netutil --hidden-import pause --hidden-import netlithic_version --hidden-import history \
+  --hidden-import contributions --hidden-import wallet --hidden-import webwallet --hidden-import node_pool --hidden-import netutil --hidden-import pause --hidden-import registry --hidden-import netlithic_version --hidden-import history \
   --paths . desktop/netlithic_desktop.py
 if find dist/Netlithic \( -name wallets.json -o -name genesis_wallets.json -o -name admin_token.txt -o -name faucet_wallet.json \) | grep -q .; then
   echo "A wallet or token file ended up in the build. Stopping." >&2; exit 1

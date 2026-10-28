@@ -1,34 +1,43 @@
 # Security policy
 
-## Reporting a problem
-Email **security@netlithicchain.com**. *(This mailbox is being set up; until it is live, open a
-private GitHub security advisory on this repo instead.)* Please don't open a public issue for a
-security bug.
-
-Include what you found, how to reproduce it, and what you think it affects. We'll confirm we got
-it within 3 business days.
-
-## Coordinated disclosure
-We follow a **90-day** coordinated disclosure window: please give us up to 90 days from your
-report to ship a fix before you publish. If a fix ships sooner, we'll agree a publish date with
-you, and we'll credit you if you'd like.
-
 ## Scope
-In scope: chain rules and validation (`core.py`, `economics.py`, `contributions.py`, `wallet.py`),
-the node (`p2p_http.py`), the web wallet, the desktop app and installer, the explorer, and the
-founder relay script (`ops/`).
+This policy covers the Netlithic test network: the node, the wallet (command line and web), the
+desktop app and installer, and the code in this public repository.
 
-Out of scope: social engineering, physical attacks, attacks needing a compromised user device,
-volumetric DDoS against our servers, and third-party services we don't run.
-
-Test on your own local node or the public testnet. Don't degrade the testnet for others or
-access anyone else's wallet.
-
-## Testnet coins
 Netlithic is a test network. **Test coins have no value** and can't be sold or redeemed.
 
-## We pay for real bugs
-If you report a real, previously unknown security bug in scope, we'll thank you with a reward
-paid in **US dollars** from project revenue or the founder's own funds. It is **never** paid from
-the chain's treasury or any on-chain pool. Amounts are decided case by case; there is no fixed
-schedule yet.
+## How to report a problem
+Please don't open a public issue or pull request for a security problem. Use one of these:
+
+1. **GitHub private vulnerability reporting:**
+   <https://github.com/Netlithicchain/netlithic-testnet/security/advisories/new>
+2. **Email:** security@netlithicchain.com
+
+## What to include
+- What you found and which part it affects (node, wallet, desktop app, or code file).
+- Clear steps to reproduce it, or a short proof of concept.
+- The version you tested (shown in the node's `/status` or the app's About page).
+- How you'd like to be credited, or that you'd rather stay anonymous.
+
+[OPTIONAL: we aim to acknowledge within X days]
+
+## Rules for testing
+Please test on your **own private network** or your own local node.
+
+Do **not**:
+- attack, overload, flood, spam, or run denial-of-service tests against the live public test
+  nodes, or against nodes run by other people;
+- try to access anyone else's wallet, keys, or data;
+- use social engineering or physical attacks against anyone.
+
+## Safe harbor
+If you act in good faith and follow these rules, we won't take legal action against you or ask
+anyone else to, and we'll treat your research as authorized. If you're unsure whether something
+is allowed, ask us first through either route above.
+
+## Coordinated disclosure
+Please give us a reasonable time to fix the problem before you share details publicly, and
+tell us if you plan to publish. We'll keep you updated, and we'll credit you if you'd like.
+
+## Rewards
+There is no bounty program at this time.

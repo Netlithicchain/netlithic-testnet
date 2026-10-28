@@ -48,8 +48,8 @@ Anti-farming rules for transfer points (built; all numbers are *proposals* set i
 - Each sender-to-recipient pair earns points for at most *proposed* 10 transfers per epoch
   (`pair_cap_per_epoch`, about a month). Paying many different people still counts; bouncing coins
   back and forth between two of your own wallets stops paying after 10.
-- Known limit: someone with many wallets can still spread transfers across many pairs. The minimum
-  amount and the per-address payout cap limit how much that's worth; more checks may follow.
+- Known limit: no open scheme can fully stop fake identities. Netlithic limits their value with the
+  minimum amount and the per-address payout cap, and monitors for abuse.
 Protocol payouts from the community pool are built:
 - Every epoch (*proposed*: 175,200 blocks, about a month), the epoch block itself must contain payout
   outputs. They split the unlocked-but-unpaid community pool pro rata by the points each address

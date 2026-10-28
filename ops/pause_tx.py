@@ -1,8 +1,12 @@
 """Build a signed payout pause/resume tx (run on the key holder's own offline machine).
 
-    python ops/pause_tx.py pause  "Reason shown publicly" --nonce 1 > pause.json
-    python ops/pause_tx.py renew  "Still investigating"   --nonce 2 > renew.json
-    python ops/pause_tx.py resume "Fixed: ..."            --nonce 3 > resume.json
+    python ops/pause_tx.py pause  "Reason shown publicly" --nonce 1 --chain-id netlithic-dev-1 > pause.json
+    python ops/pause_tx.py renew  "Still investigating"   --nonce 2 --chain-id netlithic-dev-1 > renew.json
+    python ops/pause_tx.py resume "Fixed: ..."            --nonce 3 --chain-id netlithic-dev-1 > resume.json
+
+--chain-id is REQUIRED (there is no default). A real pause uses --chain-id netlithic-dev-1. A practice run uses
+--chain-id netlithic-drill: that tx is worthless on the real chain. A tx signed with the real chain id is a live
+pause message that anyone who sees it could submit after block 5000, so never practise with the real id.
 
 The private key is read from a hidden prompt (never from argv, env or a file
 path on a server). Prints the tx JSON. Submit it to a node's /submit_tx:
@@ -28,8 +32,12 @@ def main():
     ap.add_argument("action", choices=["pause", "renew", "resume"])
     ap.add_argument("reason")
     ap.add_argument("--nonce", type=int, required=True)
-    ap.add_argument("--chain-id", default="netlithic-dev-1")
+    ap.add_argument("--chain-id", default=None)
     a = ap.parse_args()
+    if not a.chain_id or not a.chain_id.strip():
+        sys.exit("STOP: you must say which chain this is for. Add --chain-id netlithic-dev-1 for a REAL pause, or "
+                 "--chain-id netlithic-drill for a practice run. Nothing was signed and no key was asked for.")
+    a.chain_id = a.chain_id.strip()
     if not 1 <= len(a.reason) <= pause.MAX_REASON:
         sys.exit(f"reason must be 1..{pause.MAX_REASON} characters")
     key = getpass.getpass("Pause private key (hex, hidden): ").strip()

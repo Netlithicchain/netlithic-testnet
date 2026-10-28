@@ -3,7 +3,7 @@
 Uses the C library tevador/RandomX through the `RandomX` PyPI binding (or the
 `openssl-encrypt-randomx` binding, module randomx_native). There is NO pure-Python
 fallback: if no binding is installed, available() is False and nothing changes.
-RANDOMX_FORK_HEIGHT is None, so consensus never calls this. See docs/RANDOMX_PROPOSAL.md.
+RANDOMX_FORK_HEIGHT is None, so consensus never calls this.
 """
 import hashlib
 

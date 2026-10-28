@@ -1,4 +1,4 @@
-"""Generate the pause keypair. RUN ONLY ON AN OFFLINE COMPUTER (docs/PAUSE_KEY_CEREMONY.md).
+"""Generate the pause keypair. RUN ONLY ON AN OFFLINE COMPUTER (founder-only procedure, kept private).
 
 Prints the private key once to the screen (write it on paper/metal) and the
 public key (the value for PAUSE_PUBKEY). Writes nothing to disk.

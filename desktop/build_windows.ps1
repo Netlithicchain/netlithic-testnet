@@ -8,20 +8,40 @@
 #   or $env:NETLITHIC_SIGN_PFX (+ $env:NETLITHIC_SIGN_PFX_PASSWORD) for a .pfx certificate file.
 #   If neither is set the build is UNSIGNED and says so. Unsigned builds must not be published.
 $ErrorActionPreference = "Stop"
-py -m venv .venv-desktop-build
+# Use the Python the build machine chose (GitHub's setup-python sets $env:pythonLocation).
+# The "py" launcher can pick a newer Python (3.15) whose cryptography build needs a DLL we do not ship.
+$py = if ($env:pythonLocation) { Join-Path $env:pythonLocation "python.exe" } else { "py" }
+& $py -m venv --clear .venv-desktop-build
+if ($LASTEXITCODE -ne 0) { throw "Could not create the build environment with $py." }
+$pyVersion = ("" + (& .\.venv-desktop-build\Scripts\python -c "import sys; print('%d.%d' % sys.version_info[:2])")).Trim()
+if ($pyVersion -notmatch '^3\.(11|12|13)$') {
+  throw "Python $pyVersion is not supported for the desktop build (need 3.11-3.13)."
+}
+Write-Host "Building with Python $pyVersion"
 .\.venv-desktop-build\Scripts\python -m pip install --upgrade pip
 .\.venv-desktop-build\Scripts\python -m pip install -r desktop\requirements-desktop.txt
 # icon from the existing logo
 .\.venv-desktop-build\Scripts\python -c "from PIL import Image; Image.open('webwallet/static/logo.png').convert('RGBA').save('desktop/netlithic.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
 # Only code, config and page files go in. Never any wallets.json / genesis_wallets.json / data folders.
-.\.venv-desktop-build\Scripts\pyinstaller --noconfirm --clean --windowed --name Netlithic `
+# PyInstaller writes its progress to stderr. Keep the console output, keep the text, and stop the build
+# if it could not find a library (that build would crash on the user's PC). Continue (not Stop) while it
+# runs so Windows PowerShell 5.1 does not treat the stderr lines as errors.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$pyiOutput = & .\.venv-desktop-build\Scripts\pyinstaller --noconfirm --clean --windowed --name Netlithic `
   --icon desktop\netlithic.ico `
   --add-data "config;config" `
   --add-data "webwallet\static;webwallet\static" `
   --add-data "desktop\static;desktop\static" `
   --hidden-import p2p_http --hidden-import node --hidden-import core --hidden-import economics `
-  --hidden-import contributions --hidden-import wallet --hidden-import webwallet --hidden-import node_pool --hidden-import netutil --hidden-import pause --hidden-import netlithic_version --hidden-import history `
-  --paths . desktop\netlithic_desktop.py
+  --hidden-import contributions --hidden-import wallet --hidden-import webwallet --hidden-import node_pool --hidden-import netutil --hidden-import pause --hidden-import registry --hidden-import netlithic_version --hidden-import history `
+  --paths . desktop\netlithic_desktop.py 2>&1 | ForEach-Object { $line = "$_"; Write-Host $line; $line }
+$pyiExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($pyiExit -ne 0) { throw "PyInstaller failed (exit code $pyiExit)." }
+if (($pyiOutput | Out-String) -match "Library not found") {
+  throw "PyInstaller could not find a library the app needs (see the 'Library not found' line above). Stopping."
+}
 if (Get-ChildItem -Recurse dist\Netlithic -Include wallets.json,genesis_wallets.json,admin_token.txt) {
   throw "A wallet or token file ended up in the build. Stopping."
 }

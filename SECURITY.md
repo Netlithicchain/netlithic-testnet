@@ -16,7 +16,7 @@ you, and we'll credit you if you'd like.
 ## Scope
 In scope: chain rules and validation (`core.py`, `economics.py`, `contributions.py`, `wallet.py`),
 the node (`p2p_http.py`), the web wallet, the desktop app and installer, the explorer, and the
-founder relay script (`ops/`). See `docs/THREAT_MODEL.md`.
+founder relay script (`ops/`).
 
 Out of scope: social engineering, physical attacks, attacks needing a compromised user device,
 volumetric DDoS against our servers, and third-party services we don't run.

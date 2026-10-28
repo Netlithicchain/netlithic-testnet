@@ -55,6 +55,35 @@ jobs:
           for i in $(seq 30); do curl -sf http://127.0.0.1:47190/ >/dev/null && break; sleep 1; done
           curl -sf http://127.0.0.1:47190/ | grep -qi netlithic
           kill %1
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Start the built app with no window, the same way the Linux check does, and make sure its page loads.
+          # A build that cannot start (for example a missing DLL) fails here instead of on a user's PC.
+          $data = Join-Path $env:RUNNER_TEMP "nl"
+          $exe = Join-Path $PWD "dist\Netlithic\Netlithic.exe"
+          $p = Start-Process -FilePath $exe -PassThru -ArgumentList "--no-window","--data-dir",$data,"--ui-port","47190","--node-port","47191","--seed","http://127.0.0.1:9"
+          $ok = $false
+          try {
+            for ($i = 0; $i -lt 40; $i++) {
+              if ($p.HasExited) { break }
+              try {
+                $r = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:47190/" -TimeoutSec 3
+                if ($r.Content -match "(?i)netlithic") { $ok = $true; break }
+              } catch { }
+              Start-Sleep -Seconds 1
+            }
+            if (-not $ok -and $p.HasExited) { Write-Host "Netlithic.exe exited early with code $($p.ExitCode)" }
+          } finally {
+            if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          }
+          if (-not $ok) {
+            $log = Join-Path $data "node.log"
+            if (Test-Path $log) { Get-Content $log -Tail 30 }
+            throw "Windows smoke test failed: the app did not serve its page."
+          }
+          Write-Host "Windows smoke test passed."
       - uses: actions/upload-artifact@v4
         with:
           name: netlithic-${{ runner.os }}

@@ -1,5 +1,5 @@
 {
-  "_readme": "Copy to /etc/netlithic/healthcheck.json (chmod 600). Alerts stay OFF until enabled is true and a webhook_url or email is filled in.",
+  "_readme": "Copy to /etc/netlithic/healthcheck.json (chmod 600). Alerts stay OFF until enabled is true and a webhook_url or email is filled in. expected_pause_key_id must be the published pause key id (2a83f37a4ce7a269); if blank, the check warns.",
   "enabled": false,
   "nodes": ["http://127.0.0.1:8000", "http://127.0.0.1:8001"],
   "faucet_info_url": "http://127.0.0.1:8090/api/info",
@@ -12,6 +12,7 @@
   "disk_min_free_pct": 15,
   "state_file": "/var/lib/netlithic/healthcheck_state.json",
   "repeat_minutes": 360,
+  "expected_pause_key_id": "2a83f37a4ce7a269",
   "webhook_url": "",
   "email": {"smtp_host": "", "smtp_port": 587, "username": "", "password_file": "", "from": "", "to": []}
 }

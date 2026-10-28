@@ -27,7 +27,7 @@ revisit then.
 Linux needs no signing; the .sha256 file lets people check the download.
 
 ## Tested
-Linux tar.gz built and smoke-tested on the box (Python 3.12, PyInstaller): window server and
+Linux tar.gz built and smoke-tested on a Linux test machine (Python 3.12, PyInstaller): window server and
 node start, data goes to ~/.local/share/Netlithic/testnet, node stops with the app. The Mac and
-AppImage steps are written but not run (no Mac / appimagetool on the box).
+AppImage steps are written but not run (no Mac / appimagetool on the test machine).
 Note: builds need a Python with a shared libpython (python.org, uv, or GitHub's setup-python).

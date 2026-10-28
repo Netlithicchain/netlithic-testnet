@@ -121,3 +121,47 @@ def _fresh_checkpoint_cache():
     core.reset_checkpoints()
     yield
     core.reset_checkpoints()
+
+
+@pytest.fixture(autouse=True)
+def _registry_off_unless_asked(monkeypatch, request):
+    """The shipped build has the registered-contributors option ON (and, until the key is set, fail-safe: nobody earns
+    transfer points). The older points tests describe the open transfer pot (points v4), which is exactly what the
+    registry-disabled mode is, so they run with it off. Tests that need the registry say `@pytest.mark.registry`
+    (and use the helpers in tests/registry_helpers.py)."""
+    if "registry" in request.keywords:
+        return
+    import registry
+    monkeypatch.setattr(registry, "REGISTRY_ENABLED", False)
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "registry: run with the registered-contributors option as shipped (on)")
+    config.addinivalue_line("markers", "real_valid_cap: keep the production cap on registry valid_until (no test-only lift)")
+
+
+@pytest.fixture(autouse=True)
+def _registry_valid_until_cap(request, monkeypatch):
+    """Older registry tests sign with a far-future valid_until (registry.NO_EXPIRY). Consensus now caps valid_until at
+    REGISTRY_MAX_VALID_BLOCKS past the carrying block, so those tests run with the cap lifted. Tests that exercise the
+    real cap are marked @pytest.mark.real_valid_cap and run with the production value."""
+    if request.node.get_closest_marker("real_valid_cap"):
+        return
+    if "node" in request.fixturenames or "node_procs" in request.fixturenames:
+        return      # the cap is part of the rules fingerprint: an in-process node must match the subprocess nodes
+    try:
+        import registry
+    except Exception:  # pragma: no cover
+        return
+    monkeypatch.setattr(registry, "REGISTRY_MAX_VALID_BLOCKS", 10 ** 13)
+
+
+def read_private_doc(*parts):
+    """Read a doc that is not published in this repository (server runbooks, points v4 notes).
+    Those files are not published here, so the test that checks their wording is skipped."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, *parts)
+    if not os.path.exists(path):
+        pytest.skip("doc is not published in this repository: " + "/".join(parts))
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()

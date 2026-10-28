@@ -7,7 +7,7 @@ Test coins have no value.
   `e924523b2614a39b9bb4ff8bfc05e747`: height, time, reward, and kind
   ("Normal (before 5000)" or "Backstop").
 - Cards: blocks mined, total mined, backstop blocks from block 5000, and "Backstop rule followed: yes/no".
-- States the rule from docs/FOUNDER_MINING.md / ops/founder_miner.py: from block 5000 the server only
+- States the rule from ops/founder_miner.py: from block 5000 the server only
   relays; it may make one block only if nobody has made a block for 30 minutes, at most 1 per 30 minutes.
 
 ## How the check works

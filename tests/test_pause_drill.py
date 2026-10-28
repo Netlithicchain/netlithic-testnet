@@ -1,4 +1,4 @@
-"""Pause-switch practice drill (overnight 2026-10-23). Box only.
+"""Pause-switch practice drill (a local practice run).
 
 Everything here uses THROWAWAY keys generated inside the test (never a real key,
 never wallets.json of the repo: the `chain`/`wallets` fixtures run in tmp_path).

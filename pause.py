@@ -1,4 +1,4 @@
-"""Payout pause switch (key-holder-only, public, logged). OFF until PAUSE_PUBKEY is set.
+"""Payout pause switch (the founder-only, public, logged). OFF until PAUSE_PUBKEY is set.
 
 A pause is an on-chain transaction, so every pause/resume is public and
 permanent in the chain (the log is the chain itself):
@@ -30,7 +30,7 @@ from wallet import canonical, is_valid_pubkey_hex, pubkey_from_private, verify_s
 # PAUSE KEY SLOT. This is the ONLY place the pause PUBLIC key goes (64 lowercase hex characters).
 #
 #   * It is EMPTY on purpose until the founder hands over his PUBLIC key from the offline ceremony
-#     (the founder's offline key procedure, kept private). Empty = the pause switch is disabled.
+#     (docs/PAUSE_KEY_CEREMONY.md). Empty = the pause switch is disabled.
 #   * Fill it with the tool, never by hand:   python ops/set_pause_pubkey.py <public key hex>
 #   * Check it before a release:              python ops/set_pause_pubkey.py --check
 #     (exits 1 while the slot is empty, so an empty 0.5.1 can never pass the release gate).
@@ -40,7 +40,7 @@ from wallet import canonical, is_valid_pubkey_hex, pubkey_from_private, verify_s
 # ---------------------------------------------------------------------------------------------
 PAUSE_PUBKEY = "054a1d9948c3325059835edb1d4fc3f74f40ce2f12bf2417b2ac180eb2737029"  # PAUSE-PUBKEY-SLOT: empty = feature disabled; set only via ops/set_pause_pubkey.py
 MAX_REASON = 280
-PAUSE_EXPIRY_BLOCKS = 10080  # ~7 days at 60 s (set 2026-10-23); a pause lapses this many blocks after its last pause/renew
+PAUSE_EXPIRY_BLOCKS = 10080  # ~7 days at 60 s (the founder 2026-10-23); a pause lapses this many blocks after its last pause/renew
 
 
 def key_id(pubkey: Optional[str] = None) -> str:
@@ -116,7 +116,7 @@ def normalize_pause_tx(tx: dict) -> dict:
 
 
 def make_pause_tx(private_key_hex: str, paused: bool, reason: str, nonce: int, chain_id: str) -> dict:
-    """Sign a pause/resume (run on the key holder's own machine, never on a server)."""
+    """Sign a pause/resume (run on the founder's own machine, never on a server)."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key_hex))
     pub = pubkey_from_private(private_key_hex)

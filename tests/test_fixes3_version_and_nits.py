@@ -1,6 +1,7 @@
 """Review round 3: N3 (the version is 0.5.3 everywhere and builds before it are declared unsupported), N4 (the key slots
 stay empty and the release checks keep refusing) and the N5 nits."""
 import os
+from conftest import read_private_doc
 import re
 import subprocess
 import sys
@@ -10,7 +11,6 @@ import pytest
 import netlithic_version as nv
 import registry
 from registry import normalize_registry_tx, sign_registry_tx
-from conftest import read_private_doc
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -22,24 +22,24 @@ def _read(*parts):
 
 # ---- N3 ----------------------------------------------------------------------------------------------------------
 
-def test_n3_version_and_minimum_are_0_5_3():
-    assert nv.VERSION == nv.MIN_PEER_VERSION == "0.5.3"
+def test_n3_version_and_minimum_are_0_5_4():
+    assert nv.VERSION == nv.MIN_PEER_VERSION == "0.5.4"
 
 
-@pytest.mark.parametrize("v", ["0.5.0", "0.5.1", "0.5.2", "0.5.2-rc1", "0.5.3-rc1"])
+@pytest.mark.parametrize("v", ["0.5.0", "0.5.1", "0.5.2", "0.5.2-rc1", "0.5.3", "0.5.3-rc1", "0.5.4-rc1"])
 def test_n3_builds_before_0_5_3_are_outdated(v):
     assert nv.is_outdated(v)
 
 
 def test_n3_installer_version_matches():
     iss = _read("desktop", "netlithic.iss")
-    assert re.search(r"^AppVersion=0\.5\.3\s*$", iss, re.M)
+    assert re.search(r"^AppVersion=0\.5\.4\s*$", iss, re.M)
 
 
-def test_n3_healthcheck_expects_0_5_3():
+def test_n3_healthcheck_expects_0_5_4():
     import ops.healthcheck as H
-    assert H.DEFAULTS["expected_version"] == "0.5.3"
-    assert H._outdated("0.5.2", "0.5.3") and not H._outdated("0.5.3", "0.5.3")
+    assert H.DEFAULTS["expected_version"] == "0.5.4"
+    assert H._outdated("0.5.3", "0.5.4") and not H._outdated("0.5.4", "0.5.4")
 
 
 def test_n3_no_stale_current_version_left_in_code_or_runbooks():

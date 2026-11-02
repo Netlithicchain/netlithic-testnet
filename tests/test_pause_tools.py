@@ -147,6 +147,21 @@ def test_pause_tx_bad_key_fails_without_leaking_it(monkeypatch, capsys):
     assert "zz" * 32 not in str(e.value)
 
 
+def _wait_child(pid, limit=30):
+    """Reap the child, killing it if it has not exited within `limit` seconds."""
+    import signal
+    import time
+    end = time.monotonic() + limit
+    while time.monotonic() < end:
+        done, _ = os.waitpid(pid, os.WNOHANG)
+        if done:
+            return
+        time.sleep(0.05)
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    pytest.fail("child process did not exit in time")
+
+
 @pytest.mark.skipif(os.name != "posix", reason="needs a pseudo-terminal")
 def test_pause_tx_reads_key_from_hidden_prompt_on_a_real_tty(monkeypatch, capsys):
     """Run the tool as a real process: the key is typed at the prompt, never passed in argv or env."""
@@ -182,7 +197,7 @@ def test_pause_tx_reads_key_from_hidden_prompt_on_a_real_tty(monkeypatch, capsys
     assert b"hidden): " in buf
     os.write(fd, priv.encode() + b"\n")
     read_until(b'"sig"')
-    os.waitpid(pid, 0)
+    _wait_child(pid)
     os.close(fd)
     text = buf.decode(errors="replace")
     assert priv not in text.replace("\r", "")                  # the typed key was not echoed back

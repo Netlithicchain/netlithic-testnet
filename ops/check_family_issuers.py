@@ -17,14 +17,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import contributions as c
 from netutil import urlopen   # http/https only, no redirects
+import strict_json
 
 
 def load(src):
     if src.startswith(("http://", "https://")):
         with urlopen(src.rstrip("/") + "/chain", timeout=30) as r:
-            data = json.load(r)
+            data = strict_json.load(r)
     else:
-        data = json.load(open(src))
+        with open(src, encoding="utf-8") as f:
+            data = strict_json.load(f)
     return data["chain"] if isinstance(data, dict) and "chain" in data else data
 
 

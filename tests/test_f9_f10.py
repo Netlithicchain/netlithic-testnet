@@ -264,7 +264,7 @@ def test_no_dns_under_state_lock_hello_and_add_peer(strict, monkeypatch):
     seen = _lock_spy(strict, monkeypatch)
     sent = {}
     monkeypatch.setattr(strict, "_json_response", lambda s, code, body: sent.update(code=code, body=body))
-    monkeypatch.setattr(strict, "_get_json", lambda url, timeout=None: {
+    monkeypatch.setattr(strict, "_get_json", lambda url, timeout=None, **_kw: {
         "node": "http://seed.example:8000", "chain_id": strict.chain_id(), "version": "0.5.0"})
 
     class H:
@@ -280,7 +280,7 @@ def test_no_dns_under_state_lock_hello_and_add_peer(strict, monkeypatch):
 def test_no_dns_under_state_lock_discovery(strict, monkeypatch):
     seen = _lock_spy(strict, monkeypatch)
     # review F2: a gossiped candidate must now answer /status with the right chain, rules and version
-    def fake_get(url, timeout=None):
+    def fake_get(url, timeout=None, **_kw):
         if url.endswith("/status"):
             return {"chain_id": strict.chain_id(), "points_v3_rules": strict.points_v3_rules_hash(),
                     "version": strict.netlithic_version.VERSION}

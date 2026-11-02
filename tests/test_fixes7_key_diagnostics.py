@@ -96,7 +96,7 @@ def _chk(cfg_over, statuses):
 
 
 def _st(**kw):
-    return dict({"height": 10, "version": "0.5.3", "fork_ready": True, "latest_hash": "x10", "peers": [],
+    return dict({"height": 10, "version": "0.5.4", "fork_ready": True, "latest_hash": "x10", "peers": [],
                  "upgrade_deadline_height": 4900}, **kw)
 
 

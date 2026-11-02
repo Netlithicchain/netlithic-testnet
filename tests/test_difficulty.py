@@ -82,7 +82,7 @@ def test_fast_miner_cannot_flood(fork_at_100):
 
 
 def test_slow_miner_lowers_work_but_not_below_minimum(fork_at_100):
-    c = simulate(lambda i: 1_000_000.0 if i < 100 else 1_000.0, blocks=300)
+    c = simulate(lambda i: 1_000_000.0 if i < 100 else 1_000.0, blocks=400)  # a 60-block window needs a few more blocks to settle
     assert c[-1].difficulty < c[100].difficulty
     tail = c[-60:]
     avg = (tail[-1].timestamp - tail[0].timestamp) / (len(tail) - 1)

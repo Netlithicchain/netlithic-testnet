@@ -2,14 +2,14 @@
 
     python3 verify_drill_tx.py tx.json                 # tx JSON from a file
     cat tx.json | python3 verify_drill_tx.py -         # or from stdin
-    python3 verify_drill_tx.py tx.json --repo /path/to/netlithic --chain-id netlithic-drill
+    python3 verify_drill_tx.py tx.json --repo /path/to/netlithic-core --chain-id netlithic-drill
 
 Uses the repo's own function pause.signed_by_pause_key(). Public data only: the tx holds a public key and a signature,
 never a private key. Prints OK, FAIL or DANGER (exit code 0 / 1 / 2).
 
 DANGER (exit 2): the tx is ALSO valid on the REAL chain netlithic-dev-1 (--real-chain-id). That happens when the signing
 command was run without --chain-id netlithic-drill (older builds defaulted to the real chain). Such a tx is a live pause
-message that anyone who saw it could submit after block 5000: do not photograph, copy or share it; tell the maintainers. Whitespace inside the hex fields (from copying a photo by
+message that anyone who saw it could submit after block 5000: do not photograph, copy or share it; tell the builder. Whitespace inside the hex fields (from copying a photo by
 hand) is removed before checking; nothing else is "fixed".
 """
 import argparse
@@ -18,8 +18,8 @@ import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-# inside a repo checkout (ops/verify_drill_tx.py) the repo is the parent folder; a loose copy of this script must be given --repo
-_DEFAULT_REPO = os.path.dirname(_HERE) if os.path.isfile(os.path.join(os.path.dirname(_HERE), "pause.py")) else None
+# inside a repo checkout (ops/verify_drill_tx.py) the repo is the parent folder; the loose copy uses the builder's checkout
+_DEFAULT_REPO = os.path.dirname(_HERE) if os.path.isfile(os.path.join(os.path.dirname(_HERE), "pause.py")) else "/workspace/nl-v4h"
 
 
 def main():
@@ -29,8 +29,6 @@ def main():
     ap.add_argument("--chain-id", default="netlithic-drill")
     ap.add_argument("--real-chain-id", default="netlithic-dev-1", help="the live chain; a tx valid here is DANGER")
     a = ap.parse_args()
-    if not a.repo:
-        ap.error("--repo is required when this script is run outside a repo checkout (give the folder that holds pause.py)")
     sys.path.insert(0, os.path.abspath(a.repo))
     import pause
     raw = sys.stdin.read() if a.tx == "-" else open(a.tx, encoding="utf-8").read()
@@ -60,7 +58,7 @@ def main():
         print("!" * 78)
         print(f"DANGER: this tx is VALID on the REAL chain {a.real_chain_id} (paused={real['paused']}, nonce={real['nonce']}).")
         print("It is a live pause message: anyone who sees it could submit it after block 5000.")
-        print("Do NOT photograph, copy, send or save it anywhere. Tell the maintainers right away.")
+        print("Do NOT photograph, copy, send or save it anywhere. Tell the builder right away.")
         print("!" * 78)
         return 2
     if signed is None:

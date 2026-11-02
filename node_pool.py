@@ -7,6 +7,7 @@ After a failure the node is skipped for `cooldown` seconds so visitors don't wai
 a timeout every page load; then it is tried first again.
 """
 import json
+import strict_json
 import socket
 import threading
 import time
@@ -70,10 +71,10 @@ class NodePool:
         try:
             with urlopen(req, timeout=self.timeout) as r:
                 raw = r.read(self.max_bytes) if self.max_bytes else r.read()
-                return r.status, json.loads(raw.decode() or "{}")
+                return r.status, strict_json.loads(raw.decode() or "{}")
         except HTTPError as e:
             try:
-                body = json.loads(e.read(65536).decode() or "{}")
+                body = strict_json.loads(e.read(65536).decode() or "{}")
             except Exception:
                 body = {}
             return e.code, body

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -112,6 +113,8 @@ def verify_signed_tx(signed_tx: dict, chain_id: str = None) -> bool:
         amount = int(payload.get("amount", 0))
         nonce = int(payload.get("nonce", 0))
         timestamp = float(payload.get("timestamp", 0))
+        if not math.isfinite(timestamp):
+            return False
         fee = int(payload.get("fee", -1))
         chain_id = chain_id or current_chain_id()
 

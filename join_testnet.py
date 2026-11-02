@@ -17,6 +17,7 @@ TESTNET ONLY: test NLT has NO value and the chain can be wiped at any reset.
 """
 import argparse
 import json
+import strict_json
 import os
 import secrets
 import subprocess
@@ -46,10 +47,10 @@ def http_json(url, payload=None, headers=None, timeout=10):
                   headers={"Content-Type": "application/json", **(headers or {})})
     try:
         with urlopen(req, timeout=timeout) as r:
-            return r.status, json.loads(r.read().decode() or "{}")
+            return r.status, strict_json.loads(r.read().decode() or "{}")
     except HTTPError as e:
         try:
-            return e.code, json.loads(e.read().decode() or "{}")
+            return e.code, strict_json.loads(e.read().decode() or "{}")
         except Exception:
             return e.code, {}
 

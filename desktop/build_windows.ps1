@@ -34,7 +34,7 @@ $pyiOutput = & .\.venv-desktop-build\Scripts\pyinstaller --noconfirm --clean --w
   --add-data "webwallet\static;webwallet\static" `
   --add-data "desktop\static;desktop\static" `
   --hidden-import p2p_http --hidden-import node --hidden-import core --hidden-import economics `
-  --hidden-import contributions --hidden-import wallet --hidden-import webwallet --hidden-import node_pool --hidden-import netutil --hidden-import pause --hidden-import registry --hidden-import netlithic_version --hidden-import history `
+  --hidden-import contributions --hidden-import wallet --hidden-import webwallet --hidden-import strict_json --hidden-import node_pool --hidden-import netutil --hidden-import pause --hidden-import registry --hidden-import netlithic_version --hidden-import history `
   --paths . desktop\netlithic_desktop.py 2>&1 | ForEach-Object { $line = "$_"; Write-Host $line; $line }
 $pyiExit = $LASTEXITCODE
 $ErrorActionPreference = $prevEap

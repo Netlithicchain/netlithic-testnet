@@ -11,15 +11,16 @@ import argparse
 import datetime as dt
 import html
 import json
+import strict_json
 import os
 import re
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request
-from netutil import urlopen, is_public_ip
+from netutil import urlopen, is_public_ip, CappedThreadingHTTPServer
 
 from node_pool import DEFAULT_FALLBACK, NodePool, parse_nodes
 
@@ -96,7 +97,7 @@ class NodeReader:
                 # socket actually connects to must be public (same check as p2p_http).
                 with urlopen(Request(peer.rstrip("/") + "/status"), timeout=timeout,
                              allow_ip=_peer_ip_allowed) as r:
-                    out[peer] = json.loads(r.read(MAX_STATUS_BYTES))
+                    out[peer] = strict_json.loads(r.read(MAX_STATUS_BYTES))
             except Exception:
                 out[peer] = None
         with self._lock:
@@ -455,8 +456,8 @@ class Explorer:
         body += "<h2>Recent updates (public log)</h2>" + table(list(reversed(d.get("log", [])))[:25], [
             ("Block", lambda x: e(x["height"])), ("Added", lambda x: e(len(x["adds"]))),
             ("Removed", lambda x: e(len(x["removes"]))), ("Reason", lambda x: e(x["reason"]))])
-        body += ("<p class='muted'>Mining points are open to everyone. To ask for a place on the list, ask the project "
-                 "founder.</p>")
+        body += ("<p class='muted'>Mining points are open to everyone. To ask for a place on the list, see the sign-up "
+                 "steps in docs/POINTS_V4_REGISTRY.md.</p>")
         return "Registry", body
 
     def economy(self):
@@ -691,7 +692,9 @@ def main(argv=None):
     except ValueError as err:
         p.error(str(err))
     print(f"Netlithic explorer on http://{args.host}:{args.port}{bp}/ reading {args.node} (testnet: coins have no value)")
-    ThreadingHTTPServer((args.host, args.port), make_handler(Explorer(NodeReader(args.node, args.cache_seconds, args.fallback_node)), bp)).serve_forever()
+    handler = make_handler(Explorer(NodeReader(args.node, args.cache_seconds, args.fallback_node)), bp)
+    handler.timeout = 20        # drop clients that go quiet
+    CappedThreadingHTTPServer((args.host, args.port), handler, max_connections=128).serve_forever()
 
 
 if __name__ == "__main__":

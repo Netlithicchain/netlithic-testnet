@@ -1,5 +1,5 @@
 """Desktop app: page building, earning control, explorer redirect, no key handling."""
-import json, os, sys, threading
+import json, os, sys, threading, time
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -23,7 +23,11 @@ class FakeNet:
         self.calls.append((url, payload, dict(headers or {})))
         if url.endswith("/status"):
             h = self.local if "local" in url else self.network
-            return (200, {"height": h}) if h is not None else (502, {})
+            # the same block hash at the same height on both sides = the same chain
+            return (200, {"height": h, "latest_hash": f"h{h}"}) if h is not None else (502, {})
+        if "local" in url and "/block?index=" in url:  # our node's tip block, made just now
+            h = int(url.rsplit("=", 1)[1])
+            return 200, {"block": {"index": h, "hash": f"h{h}", "timestamp": time.time() - 60}}
         if url.endswith("/mine"):
             return (200, {}) if self.mine_ok else (500, {"error": "stale"})
         return 404, {}
@@ -48,6 +52,8 @@ def test_sync_words():
     assert "up to date" in earner(FakeNet(10, 10)).status()["sync"]
     s = earner(FakeNet(3, 10)).status()
     assert not s["synced"] and "block 3 of 10" in s["sync"]
+    # one block behind is no longer "up to date": mining then would compete with the network's block
+    assert not earner(FakeNet(9, 10)).status()["synced"]
     assert "Can't reach" in earner(FakeNet(10, None)).status()["sync"]
     assert "Starting" in earner(FakeNet(None, 10)).status()["sync"]
 
@@ -251,7 +257,7 @@ def test_app_starts_and_writes_log(tmp_path):
         assert ok, proc.stdout.read().decode() if proc.poll() is not None else "no answer"
     finally:
         proc.terminate(); proc.wait(15)
-    assert "starting 0.5.3 (frozen=False" in (tmp_path / "netlithic.log").read_text()
+    assert "starting 0.5.4 (frozen=False" in (tmp_path / "netlithic.log").read_text()
 
 
 def test_parent_alive_and_watchdog():
@@ -339,8 +345,10 @@ def test_earner_falls_back_to_next_seed():
         if url.startswith("http://down"):
             raise OSError("refused")
         if url.startswith("http://up"):
-            return 200, {"height": 7}
-        return 200, {"height": 7}
+            return 200, {"height": 7, "latest_hash": "x"}
+        if url == "http://local/block?index=7":
+            return 200, {"block": {"index": 7, "hash": "x", "timestamp": time.time() - 60}}
+        return 200, {"height": 7, "latest_hash": "x"}
     e = D.Earner("http://local", ["http://down:1", "http://up:2"], call, admin_token="t" * 10)
     assert e.heights() == (7, 7)
     assert e.seed == "http://up:2"

@@ -1,6 +1,7 @@
-"""Fixes round 2 (branch points-v4r-fixes2): F2, the 0.5.3 peer gate is tightened at PEER level only (block validity is
+"""Fixes round 2 (branch points-v4r-fixes2): F2, the 0.5.4 peer gate is tightened at PEER level only (block validity is
 untouched). Written to FAIL on points-v4r-fixes (eb4e3d5)."""
 import json
+from conftest import read_private_doc
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -9,7 +10,7 @@ import pytest
 
 import core
 import netlithic_version as nv
-from conftest import post, read_private_doc
+from conftest import post
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 pytestmark = pytest.mark.registry
@@ -18,7 +19,7 @@ pytestmark = pytest.mark.registry
 class FakePeer:
     """A tiny node: /status (self-reported version and rules), /peers (a gossip list). Fields can be changed live."""
 
-    def __init__(self, version="0.5.3", rules="same", gossip=()):
+    def __init__(self, version="0.5.4", rules="same", gossip=()):
         self.version, self.rules, self.gossip = version, rules, list(gossip)
         outer = self
 
@@ -72,19 +73,19 @@ def gate_off(monkeypatch):
 
 # ---- version strings -------------------------------------------------------------------------------
 @pytest.mark.parametrize("v,outdated", [
-    ("0.5.3", False), ("0.5.4", False), ("0.6.0", False), ("1.0.0", False), ("0.5.10", False),
+    ("0.5.4", False), ("0.5.5", False), ("0.5.3", True), ("0.6.0", False), ("1.0.0", False), ("0.5.10", False),
     ("0.5.2", True), ("0.5.2-rc1", True), ("0.5.2-dev", True),                                # round 3, N3: 0.5.2 dev builds are unsupported
-    ("0.5.3-rc1", True), ("0.5.3-rc.1", True), ("0.5.3-beta", True), ("0.5.3-0", True),     # a pre-release is older
-    ("0.5.4-rc1", False),                                                                     # but older than 0.5.4 only
-    ("0.5.1", True), ("0.5.1-rc1", True), ("0.5", True), ("v0.5.3", True), ("0.5.3+x", True), ("", True),
-    (None, True), (5, True), ("0.5.3 ", False), ("0.5.3.1", True), ("garbage", True), ("9" * 40 + ".0.0", True),
+    ("0.5.4-rc1", True), ("0.5.4-rc.1", True), ("0.5.4-beta", True), ("0.5.4-0", True),     # a pre-release is older
+    ("0.5.5-rc1", False),                                                                     # but older than 0.5.5 only
+    ("0.5.1", True), ("0.5.1-rc1", True), ("0.5", True), ("v0.5.4", True), ("0.5.4+x", True), ("", True),
+    (None, True), (5, True), ("0.5.4 ", False), ("0.5.4.1", True), ("garbage", True), ("9" * 40 + ".0.0", True),
 ])
 def test_f2_prerelease_and_garbled_versions_do_not_satisfy_the_minimum(v, outdated):
     assert nv.is_outdated(v) is outdated
 
 
 def test_f2_hello_refuses_a_release_candidate_after_the_deadline(node, fakes, gate_on):
-    rc = fakes(version="0.5.3-rc1")
+    rc = fakes(version="0.5.4-rc1")
     status, body = post(node, "/hello", {"url": rc.url})
     assert status == 400 and body["upgrade_needed"] and rc.url not in node.peers
 
@@ -151,7 +152,7 @@ def test_f2_periodic_recheck_drops_failing_peers_only_from_the_deadline(node, fa
 
 # ---- gossip and --peer ------------------------------------------------------------------------------
 def test_f2_gossip_discovered_peers_go_through_the_gate(node, fakes, gate_on):
-    good, old, rc, badrules, nofield, dead = (fakes(), fakes(version="0.5.1"), fakes(version="0.5.3-rc1"),
+    good, old, rc, badrules, nofield, dead = (fakes(), fakes(version="0.5.1"), fakes(version="0.5.4-rc1"),
                                               fakes(rules="0" * 64), fakes(rules=None), fakes())
     dead_url = dead.url
     dead.stop()

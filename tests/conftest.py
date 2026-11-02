@@ -54,7 +54,7 @@ def node(tmp_path, monkeypatch):
     monkeypatch.delenv("NETLITHIC_DEV_LOCAL_ADMIN", raising=False)
     import p2p_http
     p2p = importlib.reload(p2p_http)  # fresh Blockchain() in tmp_path
-    server = p2p.ThreadingHTTPServer(("127.0.0.1", 0), p2p.P2PHandler)
+    server = p2p.P2PServer(("127.0.0.1", 0), p2p.P2PHandler)
     p2p.HOST, p2p.PORT = "127.0.0.1", server.server_address[1]
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield p2p
@@ -135,7 +135,19 @@ def _registry_off_unless_asked(monkeypatch, request):
     monkeypatch.setattr(registry, "REGISTRY_ENABLED", False)
 
 
+@pytest.fixture(autouse=True)
+def _no_fork_seed_unless_asked(monkeypatch, request):
+    """The shipped fork start work (LWMA_SEED_WORK) is sized for the real network: mining one block on it takes many
+    seconds on a laptop, and tests that move the fork height down to mine a few blocks would crawl. They run with the
+    old carry-over behaviour (seed 0) unless a test says `@pytest.mark.real_seed`."""
+    if "real_seed" in request.keywords:
+        return
+    import core
+    monkeypatch.setattr(core, "LWMA_SEED_WORK", 0)
+
+
 def pytest_configure(config):
+    config.addinivalue_line("markers", "real_seed: keep the shipped LWMA_SEED_WORK for this test")
     config.addinivalue_line("markers", "registry: run with the registered-contributors option as shipped (on)")
     config.addinivalue_line("markers", "real_valid_cap: keep the production cap on registry valid_until (no test-only lift)")
 

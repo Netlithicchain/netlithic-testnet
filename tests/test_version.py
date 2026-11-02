@@ -13,7 +13,7 @@ from conftest import ROOT
 
 
 def test_version_and_fork_height_agree():
-    assert nv.VERSION == "0.5.3"
+    assert nv.VERSION == "0.5.4"
     assert nv.FORK_READY_HEIGHT == core.SECURITY_FORK_HEIGHT
 
 

@@ -92,10 +92,10 @@ def test_version_parsing():
     assert nv.parse_version(None) == (0, 0, 0)
     assert nv.parse_version("garbage") == (0, 0, 0)
     assert nv.is_outdated(None) and nv.is_outdated("0.4.9")
-    assert nv.MIN_PEER_VERSION == "0.5.3" and nv.VERSION == nv.MIN_PEER_VERSION
+    assert nv.MIN_PEER_VERSION == "0.5.4" and nv.VERSION == nv.MIN_PEER_VERSION
     assert nv.is_outdated("0.5.0")  # 0.5.0 has no pause key; it would fork off at the first pause block
     assert nv.is_outdated("0.5.1")      # a plain 0.5.1 node has no registry and no flat block points: it splits at 6440
-    assert not nv.is_outdated("0.5.3") and not nv.is_outdated("1.0.0")
+    assert nv.is_outdated("0.5.3") and not nv.is_outdated("0.5.4") and not nv.is_outdated("1.0.0")
     assert nv.UPGRADE_DEADLINE_HEIGHT == core.SECURITY_FORK_HEIGHT - 100
 
 
@@ -137,17 +137,17 @@ def test_hello_refuses_old_peer_from_deadline(node, monkeypatch):
     srv = _fake_peer("0.5.0")  # 0.5.0 has an empty pause key: refused from the deadline too
     try:
         status, body = post(node, "/hello", {"url": f"http://127.0.0.1:{srv.server_address[1]}"})
-        assert status == 400 and body["upgrade_needed"] and body["min_version"] == "0.5.3"
+        assert status == 400 and body["upgrade_needed"] and body["min_version"] == "0.5.4"
         assert not node.peers
     finally:
         srv.shutdown()
     srv = _fake_peer("0.5.1")  # plain 0.5.1 forks off at 6440 (no flat block points, no registry): refused too
     try:
         status, body = post(node, "/hello", {"url": f"http://127.0.0.1:{srv.server_address[1]}"})
-        assert status == 400 and body["upgrade_needed"] and body["min_version"] == "0.5.3"
+        assert status == 400 and body["upgrade_needed"] and body["min_version"] == "0.5.4"
     finally:
         srv.shutdown()
-    srv = _fake_peer("0.5.3")
+    srv = _fake_peer("0.5.4")
     try:
         status, body = post(node, "/hello", {"url": f"http://127.0.0.1:{srv.server_address[1]}"})
         assert status == 200 and "upgrade_needed" not in body
@@ -244,6 +244,6 @@ def test_short_epoch_bound_to_shipped_chain_id():
 
 def test_version_locked_everywhere():
     import netlithic_version
-    assert netlithic_version.VERSION == "0.5.3"
+    assert netlithic_version.VERSION == "0.5.4"
     iss = open(os.path.join(ROOT, "desktop", "netlithic.iss"), encoding="utf-8").read()
     assert f"AppVersion={netlithic_version.VERSION}\n" in iss

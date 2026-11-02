@@ -19,6 +19,19 @@ from email.message import EmailMessage
 from urllib.request import Request, urlopen
 
 
+def _strict_loads(text):
+    """Strict JSON parsing (kept inline so this script runs on its own): plain JSON numbers only."""
+    def bad_const(name):
+        raise ValueError(f"number constant {name} not allowed")
+
+    def finite(t):
+        v = float(t)
+        if v != v or v in (float("inf"), float("-inf")):
+            raise ValueError("number out of range")
+        return v
+    return json.loads(text, parse_constant=bad_const, parse_float=finite)
+
+
 def _safe_urlopen(req, *a, **kw):
     """urlopen limited to http/https (bandit B310)."""
     from urllib.parse import urlparse as _up
@@ -42,7 +55,7 @@ DEFAULTS = {
     "state_file": "/var/lib/netlithic/healthcheck_state.json",
     "repeat_minutes": 360,
     # ---- 0.5.0 checks ----
-    "expected_version": "0.5.3",       # nodes we run must report at least this
+    "expected_version": "0.5.4",       # nodes we run must report at least this
     "check_peers": True,               # also look at each node's listed peers
     "deadline_warn_blocks": 500,       # outdated peer becomes "urgent" this close to the deadline
     "checkpoints_file": os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -70,7 +83,7 @@ DEFAULTS = {
 
 def http_json(url, timeout=8):
     with _safe_urlopen(Request(url, headers={"Accept": "application/json"}), timeout=timeout) as r:
-        return json.loads(r.read(1 << 20).decode() or "{}")
+        return _strict_loads(r.read(1 << 20).decode() or "{}")
 
 
 def cert_days_left(host, port=443, timeout=8):
@@ -177,7 +190,7 @@ def journal_lines(units, since_ts, run=None):
 def v050_checks(cfg, state, statuses, now, fetch=http_json, journal_fn=journal_lines):
     """0.5.0 alerts. statuses = {node: /status json}. Returns (problems, new_state)."""
     problems = {}
-    want = cfg.get("expected_version") or "0.5.3"
+    want = cfg.get("expected_version") or "0.5.4"
     deadline = None
     if not str(cfg.get("expected_pause_key_id") or "").strip() and any(s.get("version") for s in statuses.values()):
         # One warning for the whole config (not one per node); repeats only every repeat_minutes like the others.
@@ -199,6 +212,9 @@ def v050_checks(cfg, state, statuses, now, fetch=http_json, journal_fn=journal_l
             problems[f"fork_not_ready:{node}"] = f"Node {node} says it is not ready for the block-5000 fork."
         if st.get("upgrade_deadline_height"):
             deadline = int(st["upgrade_deadline_height"])
+    msg = difficulty_rules_problem(statuses)
+    if msg:
+        problems["difficulty_rules_differ"] = msg
     tip = max((int(s.get("height", 0)) for s in statuses.values()), default=0)
     # tip split: same height, different hash
     by_h = {}
@@ -302,6 +318,23 @@ def v050_checks(cfg, state, statuses, now, fetch=http_json, journal_fn=journal_l
     return problems, state
 
 
+# ---- difficulty rules must be the same on every node we run ----
+def difficulty_rules_problem(statuses):
+    """statuses = {node: /status json}. Our nodes must report the same difficulty_rules fingerprint: if they differ,
+    they would accept different blocks from block 5000 and split. A node that reports none while another does counts as
+    different (it is on older code). If no node reports one (all older than 0.5.4), nothing is said here: the version
+    check already speaks up."""
+    seen = {}
+    for node, st in statuses.items():
+        value = (st or {}).get("difficulty_rules")
+        seen[node] = str(value).strip().lower() if value else None
+    if not any(seen.values()) or len(set(seen.values())) == 1:
+        return None
+    parts = [f"{node}: {(v[:12] if v else 'none reported')}" for node, v in sorted(seen.items())]
+    return ("Our nodes report different difficulty rules (" + "; ".join(parts) + "). They would accept different blocks "
+            "from block 5000 and split. Run the same release on every node.")
+
+
 # ---- reorg and miner-share alerts (both wired into v050_checks) ----
 def reorg_problem(prev_hashes, now_hashes, alert_depth=3):
     """prev_hashes/now_hashes = {height: hash} of recent blocks from the last run and now.
@@ -397,7 +430,7 @@ def miner_share_problems(miners, threshold_pct=40, min_blocks=50, funders=None, 
 
     Honest limits: this catches a miner that spreads blocks over several addresses it has moved coins between. A miner
     who never links its addresses on chain looks like several small miners and is NOT caught. Because the mining pot
-    follows block share, a high block share is the thing to watch, however many addresses it uses.
+    follows block share (docs/POINTS_V4.md), a high block share is the thing to watch, however many addresses it uses.
     Addresses in `ignore` (the founder's own miners) are left out of the count."""
     ignore = set(ignore or ())
     miners = [m for m in miners if m not in ignore]

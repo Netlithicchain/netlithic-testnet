@@ -1,6 +1,6 @@
 """Single source of the Netlithic software version.
 
-0.5.0 = the block-5000 security fork release (locked, approved 2026-10-23).
+0.5.0 = the block-5000 security fork release (locked, approved by the founder 2026-10-23).
 0.5.1 = 0.5.0 plus the pause public key (pause.PAUSE_PUBKEY) and the version gate raised to 0.5.1,
         because a node whose PAUSE_PUBKEY is empty rejects any block that carries a pause tx.
         0.5.1 must only be released with PAUSE_PUBKEY set (ops/set_pause_pubkey.py --check).
@@ -14,6 +14,13 @@
         EVERY build before 0.5.3 (0.5.0, 0.5.1 and the 0.5.2 dev builds, e.g. eb4e3d5) is unsupported: peers on them are
         refused from block 4900 and consensus splits from them at the first registry key rotation or registry
         transaction with a far-future valid_until. All nodes must run 0.5.3 before block 4900.
+0.5.4 = 0.5.3 plus the block-5000 mining-difficulty hardening: the mining lock is held only briefly, difficulty is
+        worked out once per block, the LWMA uses exact integers over a 60-block window, timestamps are validated
+        strictly from block 5000, the first block after 5000 starts from a stated work level instead of carrying the
+        old one, blocks are relayed to peers concurrently, and the desktop app stays on the public network. Blocks
+        below 5000 are checked exactly as in 0.5.3, so 0.5.3 and 0.5.4 nodes agree on every block until 5000 and
+        split at 5000. The version gate is raised to 0.5.4 (still enforced from block 4900), so every node must run
+        0.5.4 before block 4900.
 A node is "fork-ready" when it enforces the rules that switch on at
 SECURITY_FORK_HEIGHT; /status reports both so the explorer can count upgraded nodes.
 
@@ -28,7 +35,7 @@ Peer gate (peer level only, NOT block validity): it decides who we talk to, neve
 """
 import re
 
-VERSION = "0.5.3"
+VERSION = "0.5.4"
 FORK_READY_HEIGHT = 5000   # must equal core.SECURITY_FORK_HEIGHT (checked in tests)
 
 
@@ -41,8 +48,8 @@ def version_string(component: str = "netlithic") -> str:
 # pause key and would reject the first pause block, so they would fork off. Before
 # UPGRADE_DEADLINE_HEIGHT we still peer with them but flag "upgrade needed"; from that height on,
 # /hello refuses new handshakes from them. This does not disconnect peers that are already
-# connected, so it limits exposure and warns people; it is not a hard fork guard.
-MIN_PEER_VERSION = "0.5.3"
+# connected, so it limits exposure and warns people; it is not a hard fork guard (docs/UPGRADE_RUNBOOK_0.5.1.md).
+MIN_PEER_VERSION = "0.5.4"
 UPGRADE_DEADLINE_HEIGHT = FORK_READY_HEIGHT - 100   # ~4900: about 16 hours before the fork (blocks before 5000 are ~10 min apart)
 
 

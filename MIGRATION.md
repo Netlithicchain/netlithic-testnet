@@ -1,5 +1,22 @@
 # Migrations
 
+## 0.5.4 (required before block 4900)
+
+### Who needs to upgrade
+Everyone. Every node must run 0.5.4 before block 4900. From block 4900, nodes stop talking to peers on older versions. The new difficulty rules start at block 5000, and nodes still on an older version will split off onto their own chain there.
+
+Blocks below 5000 are checked exactly as in 0.5.3, so nothing changes on the chain until block 5000. Your data and wallets are kept.
+
+### Upgrade steps (running from source)
+1. Get the v0.5.4 code:
+   `git fetch --tags origin` and then `git checkout v0.5.4`
+   (or download the v0.5.4 source archive from the v0.5.4 release page on GitHub).
+2. Stop your node (Ctrl+C in its window, or stop its service).
+3. Update the dependencies: `pip install -r requirements.txt`
+4. Start the node again the way you normally do, for example `python netlithic.py node start 8000`.
+5. Check it: open http://127.0.0.1:8000/status (or run `python netlithic.py status`). It should show `"version": "0.5.4"` and `"fork_ready": true`.
+
+
 ## Chain id from config, fees, no printed keys (branch `testnet-prep`)
 
 This is a new chain again (the fee setting is in the genesis hash, and every transfer now has a

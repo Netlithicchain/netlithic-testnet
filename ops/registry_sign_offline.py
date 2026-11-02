@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sign one unsigned registry update on the key holder's OWN OFFLINE machine. Never run this on a server or on the build box.
+"""Sign one unsigned registry update on the founder's OWN OFFLINE machine. Never run this on a server or on the build box.
 
     python ops/registry_sign_offline.py unsigned.json [--index 0]      prints the signature (128 hex characters)
     python ops/registry_sign_offline.py unsigned.json --as-new-key     KEY ROTATION only: the NEW key signs "I accept this

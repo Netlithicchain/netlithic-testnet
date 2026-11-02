@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Registry tool: keep the TEMPORARY, CENTRALIZED registered-contributors list.
+"""Registry tool: keep the TEMPORARY, CENTRALIZED registered-contributors list (docs/POINTS_V4_REGISTRY.md).
 
     python ops/registry_tool.py --check                      release gate: exit 1 while the REGISTRY_PUBKEY slot is empty
     python ops/registry_tool.py --status                     show the slot, always exit 0
@@ -19,7 +19,7 @@
     python ops/registry_tool.py check-tx tx.json             verify a finished tx against the slot key
 
 NO PRIVATE KEY EVER TOUCHES THIS TOOL OR THIS MACHINE. `build` writes the exact message to sign (message_hex).
-The signature is made on the key holder's own offline machine (ops/registry_sign_offline.py, or any Ed25519 signer) and is
+The signature is made on the founder's own offline machine (ops/registry_sign_offline.py, or any Ed25519 signer) and is
 handed back as text. `assemble` only attaches and verifies it. Nothing here sends anything to a node: submitting the
 finished tx is a separate, deliberate step (POST /submit_tx on a node), done by the founder.
 
@@ -32,6 +32,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+import strict_json  # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, "ops"))
 
 import re  # noqa: E402
@@ -213,7 +214,7 @@ def _fetch(url: str) -> dict:
     if urlparse(url).scheme not in ("http", "https"):
         raise ValueError("URL must be http or https")
     with urlopen(Request(url, headers={"User-Agent": "netlithic-registry-tool"}), timeout=30) as r:  # nosec B310 read-only GET
-        return json.loads(r.read().decode())
+        return strict_json.loads(r.read().decode())
 
 
 # ------------------------------------------------------------------ commands

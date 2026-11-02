@@ -6,7 +6,7 @@ Before block 5000 the chain makes ~1 block per 10 minutes (founder timer), after
 count therefore means very different real time before and after the fork.
 These constants state each rule as a time and convert it at the 60 s target.
 Nothing in core/pause/contributions/economics reads this module yet; apply() exists
-only so tests and drills can try the values.
+only so tests and drills can try the values. See docs/BLOCK_TIME_AUDIT.md.
 """
 PROPOSAL_ACTIVE = True              # all four values approved 2026-10-23 and set in the modules
 TARGET_BLOCK_SECONDS = 60           # == core.LWMA_TARGET_BLOCK_TIME (checked in tests)
@@ -16,7 +16,7 @@ DAY = 24 * HOUR
 
 # rule -> intended real time (seconds)
 REORG_LIMIT_SECONDS = 12 * HOUR          # APPROVED 2026-10-23 -> 720, now in core
-PAUSE_EXPIRY_SECONDS = 7 * DAY           # founder: "about 7 days"
+PAUSE_EXPIRY_SECONDS = 7 * DAY           # the founder: "about 7 days"
 PAYOUT_EPOCH_SECONDS = 1 * DAY           # 144 blocks was chosen as ~1 day at 10-min blocks
 MIN_ADDRESS_AGE_SECONDS = 1 * DAY        # APPROVED 2026-10-23 -> 1440, now in contributions
 

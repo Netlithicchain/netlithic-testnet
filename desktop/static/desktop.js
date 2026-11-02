@@ -27,7 +27,7 @@
     var b = $("e-toggle");
     b.textContent = earning ? "Stop helping" : "Start helping";
     b.className = earning ? "big earn-btn on" : "big earn-btn";
-    b.disabled = !earning && !s.synced;
+    b.disabled = !earning && !(s.can_help === undefined ? s.synced : s.can_help);
     $("e-sync").textContent = s.sync;
     $("e-blocks").textContent = String(s.blocks_found);
     var st = s.stats || {};

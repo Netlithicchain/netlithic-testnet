@@ -11,7 +11,8 @@ from conftest import TEST_ADMIN_TOKEN, free_port, post
 
 # Subprocess nodes run the shipped defaults (registry on), so the in-process node
 # must too, or the handshake rightly refuses a different rules fingerprint.
-pytestmark = pytest.mark.registry
+# The difficulty fingerprint includes the fork seed, so the in-process node must use the shipped seed too.
+pytestmark = [pytest.mark.registry, pytest.mark.real_seed]
 
 
 @pytest.fixture(autouse=True)

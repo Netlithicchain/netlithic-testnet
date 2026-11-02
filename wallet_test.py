@@ -3,6 +3,7 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
 from netutil import urlopen
+import strict_json
 
 from wallet import Wallet
 
@@ -22,7 +23,7 @@ def post_json(url: str, payload: dict) -> dict:
     )
 
     with urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        return strict_json.loads(resp.read().decode("utf-8"))
 
 
 def get_json(url: str) -> dict:
@@ -33,7 +34,7 @@ def get_json(url: str) -> dict:
     )
 
     with urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        return strict_json.loads(resp.read().decode("utf-8"))
 
 
 def print_title(text: str) -> None:

@@ -1,7 +1,9 @@
 import hmac
 import ipaddress
 import json
+import strict_json
 import os
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -9,12 +11,12 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import Request
 from collections import OrderedDict
 
-from netutil import urlopen, is_public_ip
+from netutil import urlopen, is_public_ip, CappedThreadingHTTPServer, normalize_ip, trusted_proxies_from_env
 
 import netlithic_version
 import pause
 import registry
-from core import SECURITY_FORK_HEIGHT, Blockchain, PreviewBusy, normalize_address, tx_id, normalize_tx, is_reward_tx, is_post_fork, points_v3_rules_hash
+from core import SECURITY_FORK_HEIGHT, Blockchain, PreviewBusy, normalize_address, tx_id, normalize_tx, is_reward_tx, is_post_fork, points_v3_rules_hash, difficulty_rules_hash
 import economics
 from economics import format_points, to_nlt
 
@@ -23,6 +25,9 @@ HOST = "127.0.0.1"
 PORT = 8000
 ADVERTISE_URL = None  # public URL other nodes should use for us (set via --advertise-url)
 HELLO_TIMEOUT_SECONDS = 5
+# Whole-request limits (connect + headers + body) for peer fetches, so a slow peer cannot hold a thread open.
+PEERS_FETCH_DEADLINE_SECONDS = 15
+CHAIN_FETCH_DEADLINE_SECONDS = 120
 
 PEERS_FILE = "peers.json"
 MEMPOOL_FILE = "mempool.json"
@@ -65,6 +70,7 @@ seen_txs = {}
 _auto_sync_thread = None
 _auto_sync_running = False
 state_lock = threading.Lock()
+mine_lock = threading.Lock()   # serialises /mine searches; always taken BEFORE state_lock, never while holding it
 
 
 # ----------------------------
@@ -82,10 +88,19 @@ def _foreign_chain(data) -> bool:
     cid = data.get("chain_id") if isinstance(data, dict) else None
     return cid is not None and cid != chain_id()
 
+BLOCK_INDEX_RE = re.compile(r"[0-9]{1,12}")   # GET /block?index=N: ASCII digits only
+
 
 def _json_response(handler, status_code, payload):
     try:
-        body = json.dumps(payload, indent=2).encode("utf-8")
+        try:
+            # Strict JSON: never emit the non-standard number tokens (not-a-number, infinity) that a browser's JSON.parse rejects.
+            body = json.dumps(payload, indent=2, allow_nan=False).encode("utf-8")
+        except ValueError:
+            # A value that is not a real number reached the output; answer with a fixed, valid error instead of crashing.
+            print(f"Refused to send a response containing a non-finite number ({getattr(handler, 'path', '?')})")
+            status_code = 500
+            body = b'{"error": "Internal error: response contained a value that is not a valid number"}'
         handler.send_response(status_code)
         handler.send_header("Content-Type", "application/json")
         handler.send_header("Content-Length", str(len(body)))
@@ -93,6 +108,11 @@ def _json_response(handler, status_code, payload):
         handler.wfile.write(body)
     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
         pass
+
+
+def strict_json_loads(text):
+    """Strict JSON parsing for everything we receive (see strict_json.py)."""
+    return strict_json.loads(text)
 
 
 class BodyTooLarge(ValueError):
@@ -106,7 +126,7 @@ def _read_json(handler):
     if length > MAX_POST_BYTES:
         raise BodyTooLarge(f"Body over {MAX_POST_BYTES} bytes")
     raw = handler.rfile.read(length) if length > 0 else b"{}"
-    return json.loads(raw.decode("utf-8"))
+    return strict_json_loads(raw.decode("utf-8"))
 
 
 DEV_LOCAL_ADMIN_ENV = "NETLITHIC_DEV_LOCAL_ADMIN"
@@ -319,6 +339,14 @@ def _gate_error(status, height: int):
                      "(different Netlithic build). Update both to the same release.",
             "points_v3_rules": points_v3_rules_hash(),
         }, False
+    peer_diff = status.get("difficulty_rules")
+    if peer_diff is not None and peer_diff != difficulty_rules_hash():
+        # only a peer that reports the field is compared (0.5.4 and newer); an older build is handled by the version gate
+        return {
+            "error": "Difficulty rules mismatch: this peer follows different mining-difficulty rules from this node "
+                     "(different Netlithic build). Update both to the same release.",
+            "difficulty_rules": difficulty_rules_hash(),
+        }, False
     peer_version = status.get("version")
     if netlithic_version.is_outdated(peer_version):
         if height >= netlithic_version.UPGRADE_DEADLINE_HEIGHT:
@@ -342,7 +370,8 @@ def _gate_check_url(url: str, strict: bool):
     """Fetch url/status (no lock held; the address must already have passed peer_address_allowed) and run the gate.
     Returns None if the peer passes, else a reason string. An unreachable peer passes unless strict=True."""
     try:
-        status = _get_json(f"{url}/status", timeout=HELLO_TIMEOUT_SECONDS)
+        status = _get_json(f"{url}/status", timeout=HELLO_TIMEOUT_SECONDS,
+                           deadline_seconds=HELLO_TIMEOUT_SECONDS)
     except Exception:
         return "Could not verify peer: /status unreachable" if strict else None
     err, _ = _gate_error(status, _tip_height())
@@ -693,23 +722,72 @@ def _post_json(url: str, payload: dict, timeout: int = 5):
         if len(body) > MAX_FETCH_BYTES:
             raise ValueError(f"Peer response over {MAX_FETCH_BYTES} bytes")
         body = body.decode("utf-8")
-        return json.loads(body) if body else {}
+        return strict_json_loads(body) if body else {}
 
 
-def _get_json(url: str, timeout: int = 5):
+def _read_capped(resp, deadline=None):
+    """Read a peer reply, at most MAX_FETCH_BYTES + 1 bytes. With a deadline (time.monotonic() value) the WHOLE
+    read must finish by then, so a peer that sends a byte at a time cannot hold the call open."""
+    if deadline is None:
+        return resp.read(MAX_FETCH_BYTES + 1)
+    sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
+    chunks, size = [], 0
+    while size <= MAX_FETCH_BYTES:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("Peer reply took too long")
+        if getattr(resp, "isclosed", lambda: False)():
+            break
+        if sock is not None:
+            try:
+                sock.settimeout(left)
+            except OSError:
+                pass
+        chunk = resp.read1(65536) if hasattr(resp, "read1") else resp.read(65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    if time.monotonic() > deadline:
+        raise TimeoutError("Peer reply took too long")
+    return b"".join(chunks)
+
+
+def _get_json(url: str, timeout: int = 5, deadline_seconds: float = None):
+    """deadline_seconds, when given, bounds the whole call with one deadline: connect, response headers and
+    body together, not each read separately."""
     req = Request(url, headers={"Accept": "application/json"})
-    with urlopen(req, timeout=timeout, allow_ip=fetch_ip_allowed) as resp:
-        body = resp.read(MAX_FETCH_BYTES + 1)
+    deadline = None if deadline_seconds is None else time.monotonic() + deadline_seconds
+    with urlopen(req, timeout=timeout, allow_ip=fetch_ip_allowed, deadline=deadline) as resp:
+        try:
+            body = _read_capped(resp, deadline)
+        finally:
+            getattr(resp, "cancel_deadline", lambda: None)()
         if len(body) > MAX_FETCH_BYTES:
             raise ValueError(f"Peer response over {MAX_FETCH_BYTES} bytes")
         body = body.decode("utf-8")
-        return json.loads(body) if body else {}
+        return strict_json_loads(body) if body else {}
 
 
 def self_url() -> str:
     if ADVERTISE_URL:
         return ADVERTISE_URL
     return f"http://{HOST}:{PORT}"
+
+
+def _advertised_sender():
+    """Our URL for a relayed block's from_peer, or None when we only listen on
+    loopback (a desktop node). Nobody else can reach that address, so naming it
+    would make receivers try to fetch from themselves; leaving it out is
+    harmless because a receiver only syncs from a sender it already knows."""
+    if ADVERTISE_URL or ALLOW_PRIVATE_PEERS:
+        return self_url()
+    host = (HOST or "").strip("[]")
+    try:
+        loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = host.lower() == "localhost"
+    return None if loopback else self_url()
 
 
 def _tx_exists_in_mempool(tx: dict) -> bool:
@@ -754,7 +832,7 @@ def _introduce_to(peer_url: str):
 
 def _discover_peers_from(peer_url: str):
     try:
-        data = _get_json(f"{peer_url}/peers")
+        data = _get_json(f"{peer_url}/peers", deadline_seconds=PEERS_FETCH_DEADLINE_SECONDS)
         remote_peers = data.get("peers", [])
         changed = False
 
@@ -791,26 +869,84 @@ def _discover_peers_from(peer_url: str):
         pass
 
 
+# New blocks are passed on to all peers AT THE SAME TIME, so one slow or dead peer cannot hold up the others.
+# Everything is bounded: a fixed pool of worker threads, a short timeout per peer, one overall deadline for the
+# call, and a cap on sends waiting for a worker. No new endpoint: it is the same /receive_block call as before.
+RELAY_WORKERS = 16
+RELAY_PEER_TIMEOUT = 3          # seconds per peer
+RELAY_DEADLINE = 6              # seconds the caller waits for the whole round at most
+RELAY_MAX_PENDING = 64          # sends allowed in flight or queued; more are skipped (peers sync on their own)
+_relay_pool = None
+_relay_lock = threading.Lock()
+_relay_pending = 0
+_relay_skipped_total = 0       # peers not sent to because RELAY_MAX_PENDING was reached (counted and logged)
+
+
+def _relay_executor():
+    global _relay_pool
+    with _relay_lock:
+        if _relay_pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _relay_pool = ThreadPoolExecutor(max_workers=RELAY_WORKERS, thread_name_prefix="relay")
+        return _relay_pool
+
+
+def _relay_send_one(peer: str, payload: dict) -> None:
+    global _relay_pending
+    try:
+        _post_json(f"{peer}/receive_block", payload, timeout=RELAY_PEER_TIMEOUT)
+    except Exception:
+        pass
+    finally:
+        with _relay_lock:
+            _relay_pending -= 1
+
+
 def _broadcast_block(block_data: dict, exclude_peer: str = None):
+    global _relay_pending, _relay_skipped_total
     block_hash = block_data.get("hash")
     if isinstance(block_hash, str):
         _mark_seen_block(block_hash)
 
-    for peer in list(peers):
-        if exclude_peer and peer == exclude_peer:
-            continue
-
+    payload = {
+        "block": block_data,
+        "from_peer": _advertised_sender(),
+        "chain_id": chain_id(),
+    }
+    pool = _relay_executor()
+    futures = []
+    targets = [p for p in list(peers) if not (exclude_peer and p == exclude_peer)]
+    for position, peer in enumerate(targets):
+        with _relay_lock:
+            if _relay_pending >= RELAY_MAX_PENDING:
+                # Not silent: the peers left over (this one and all after it) are counted and logged. They still
+                # learn about the block on their own, through their normal sync.
+                skipped = len(targets) - position
+                _relay_skipped_total += skipped
+                print(f"Relay: {RELAY_MAX_PENDING} sends already pending, skipped {skipped} of {len(targets)} peers "
+                      f"for block {block_data.get('index')} ({_relay_skipped_total} skipped in total)")
+                break
+            _relay_pending += 1
         try:
-            _post_json(
-                f"{peer}/receive_block",
-                {
-                    "block": block_data,
-                    "from_peer": self_url(),
-                    "chain_id": chain_id(),
-                },
-            )
+            futures.append(pool.submit(_relay_send_one, peer, payload))
         except Exception:
-            continue
+            with _relay_lock:
+                _relay_pending -= 1
+
+    if futures:
+        from concurrent.futures import wait
+        _done, not_done = wait(futures, timeout=RELAY_DEADLINE)
+        dropped = 0
+        for f in not_done:
+            if f.cancel():      # a send that never got a worker is dropped; running ones end at their own timeout
+                dropped += 1
+                with _relay_lock:
+                    _relay_pending -= 1
+        if dropped:
+            with _relay_lock:
+                _relay_skipped_total += dropped
+            print(f"Relay: {dropped} sends never got a worker before the {RELAY_DEADLINE} s deadline and were dropped "
+                  f"for block {block_data.get('index')}")
 
 
 def _requeue_orphaned_txs(old_chain):
@@ -879,7 +1015,7 @@ def _broadcast_tx(tx: dict, exclude_peer: str = None):
 
 def _sync_with_peer(peer: str):
     try:
-        data = _get_json(f"{peer}/chain")
+        data = _get_json(f"{peer}/chain", deadline_seconds=CHAIN_FETCH_DEADLINE_SECONDS)
         if data.get("chain_id") != chain_id():
             return  # different (or unlabelled) network: never adopt its chain
         incoming_chain = data.get("chain", [])
@@ -930,7 +1066,149 @@ def _start_sync_thread():
 # HTTP Handler
 # ----------------------------
 
+# Inbound connection limits. A client that goes quiet is dropped after
+# INBOUND_READ_TIMEOUT_SECONDS of silence. The request line and headers must arrive
+# within HEADER_DEADLINE_SECONDS in total, and a body within
+# BODY_DEADLINE_BASE_SECONDS + Content-Length / BODY_MIN_BYTES_PER_SECOND.
+# At most MAX_INBOUND_CONNECTIONS are served at once, at most
+# MAX_CONNECTIONS_PER_IP from one address, and RESERVED_PEER_SLOTS of the total
+# are kept for our configured peers/seeds and loopback (healthcheck).
+INBOUND_READ_TIMEOUT_SECONDS = 20
+MAX_INBOUND_CONNECTIONS = 256
+HEADER_DEADLINE_SECONDS = 10
+BODY_DEADLINE_BASE_SECONDS = 10
+BODY_MIN_BYTES_PER_SECOND = 64 * 1024
+RESERVED_PEER_SLOTS = 32
+# Peers we were told about at startup (--peer). Only these, the built-in seed list,
+# loopback and NETLITHIC_RESERVED_IPS get reserved slots; peers learned later
+# (/hello, /peers discovery) do not.
+CONFIGURED_PEER_URLS = set()
+RESERVED_IPS_REFRESH_SECONDS = 300
+
+
+def _env_int(name, default):
+    try:
+        v = int(os.environ.get(name, ""))
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
+MAX_CONNECTIONS_PER_IP = _env_int("NETLITHIC_MAX_CONNECTIONS_PER_IP", 12)
+MAX_CONNECTIONS_PER_TRUSTED_IP = _env_int("NETLITHIC_MAX_CONNECTIONS_PER_TRUSTED_IP", 16)
+
+
+class P2PServer(CappedThreadingHTTPServer):
+    """The node's server: total cap, per-address cap, and slots kept back for trusted addresses."""
+
+    def __init__(self, server_address, handler, max_connections=None,
+                 max_per_ip=None, reserved_slots=None, reserved_ips=(), trusted_max_per_ip=None,
+                 proxy_share=0.5):
+        super().__init__(server_address, handler, proxy_share=proxy_share,
+                         trusted_max_per_ip=trusted_max_per_ip or MAX_CONNECTIONS_PER_TRUSTED_IP,
+                         header_deadline=HEADER_DEADLINE_SECONDS,
+                         body_deadline_base=BODY_DEADLINE_BASE_SECONDS,
+                         body_min_rate=BODY_MIN_BYTES_PER_SECOND,
+                         max_body_bytes=MAX_POST_BYTES,
+                         max_connections=max_connections or MAX_INBOUND_CONNECTIONS,
+                         max_per_ip=max_per_ip or MAX_CONNECTIONS_PER_IP,
+                         reserved_slots=RESERVED_PEER_SLOTS if reserved_slots is None else reserved_slots,
+                         reserved_ips=reserved_ips)
+
+
+def _peer_ips(urls):
+    import socket
+    out = set()
+    for u in urls:
+        host = urlparse(u).hostname
+        if not host:
+            continue
+        try:
+            out.add(str(ipaddress.ip_address(host)))
+            continue
+        except ValueError:
+            pass
+        try:
+            for info in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP):
+                out.add(info[4][0])
+        except OSError:
+            pass
+    return out
+
+
+def _reserved_ips():
+    """Loopback (local healthcheck), NETLITHIC_RESERVED_IPS, and the addresses of the
+    configured peers (--peer) and the built-in seed list. Never peers learned at run time.
+    With NETLITHIC_TRUSTED_PROXIES set, loopback is left out (a local proxy would hand the
+    reserve to every proxied client); use NETLITHIC_HEALTH_PORT for the healthcheck."""
+    ips = set() if trusted_proxies_from_env() else {"127.0.0.1", "::1"}
+    ips |= {x.strip() for x in os.environ.get("NETLITHIC_RESERVED_IPS", "").split(",") if x.strip()}
+    return ips | _peer_ips(set(CONFIGURED_PEER_URLS) | set(_builtin_seeds()))
+
+
+# Same list as easy_node.SEEDS (a test keeps them equal). Kept here so packaged builds
+# that ship without easy_node still reserve slots for the seeds.
+BUILTIN_SEEDS = ("http://137.184.199.238:8000", "http://157.230.63.97:8000")
+
+
+def _builtin_seeds():
+    return list(BUILTIN_SEEDS)
+
+
+def _refresh_reserved_ips(server):
+    """Re-resolve the trusted set and log what changed (a --peer hostname now pointing
+    somewhere else shows up here)."""
+    new = frozenset(normalize_ip(i) for i in _reserved_ips())
+    old = server.reserved_ips
+    if new != old:
+        added, removed = sorted(new - old), sorted(old - new)
+        print(f"Trusted addresses changed: added {added}, removed {removed}", flush=True)
+        server.reserved_ips = new
+    return new
+
+
+def _keep_reserved_ips_fresh(server):
+    while True:
+        time.sleep(RESERVED_IPS_REFRESH_SECONDS)
+        try:
+            _refresh_reserved_ips(server)
+        except Exception:
+            pass
+
+
+def _report_trusted_proxies(server):
+    """Print the proxy set and warn: a node's P2P port should be served directly."""
+    if not server.trusted_proxies:
+        return
+    import sys
+    print(f"Trusted proxies (up to {server.max_per_proxy} connections each, no reserved slots): "
+          f"{sorted(server.trusted_proxies)}", flush=True)
+    print("WARNING: NETLITHIC_TRUSTED_PROXIES is set on a node. Serve the P2P port directly; "
+          "never put it behind a proxy (see RUNNING.md).", file=sys.stderr, flush=True)
+
+
+HEALTH_MAX_CONNECTIONS = 8
+
+
+def _start_health_listener(port):
+    """Optional loopback-only listener (NETLITHIC_HEALTH_PORT) for the local healthcheck,
+    with its own small connection pool, so busy public traffic can't lock it out.
+    It answers GET /status and /health only (same reply); everything else is 404."""
+    srv = CappedThreadingHTTPServer(("127.0.0.1", port), HealthHandler,
+                                    max_connections=HEALTH_MAX_CONNECTIONS,
+                                    max_per_ip=HEALTH_MAX_CONNECTIONS,
+                                    header_deadline=HEADER_DEADLINE_SECONDS,
+                                    body_deadline_base=BODY_DEADLINE_BASE_SECONDS,
+                                    body_min_rate=BODY_MIN_BYTES_PER_SECOND,
+                                    max_body_bytes=MAX_POST_BYTES, trusted_proxies=())
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
 class P2PHandler(BaseHTTPRequestHandler):
+    timeout = INBOUND_READ_TIMEOUT_SECONDS
+
+
     def log_message(self, format, *args):
         return
 
@@ -951,6 +1229,19 @@ class P2PHandler(BaseHTTPRequestHandler):
                         "chain": blockchain.to_list(),
                     },
                 )
+
+        if path == "/block":
+            # One block by height (read-only, one block of data). Lets a light client check
+            # whether its tip sits on this node's chain without downloading the chain.
+            # Plain ASCII digits only: int() would also accept "1_0", signs, surrounding spaces and Unicode digits.
+            raw_index = (params.get("index") or [""])[0]
+            if not BLOCK_INDEX_RE.fullmatch(raw_index):
+                return _json_response(self, 400, {"error": "index must be a whole number (digits 0-9 only)"})
+            index = int(raw_index)
+            with state_lock:
+                if not 0 <= index < len(blockchain.chain):
+                    return _json_response(self, 404, {"error": "No block at that height"})
+                return _json_response(self, 200, {"block": blockchain.chain[index].to_dict()})
 
         if path == "/mempool":
             with state_lock:
@@ -1002,6 +1293,7 @@ class P2PHandler(BaseHTTPRequestHandler):
                         "upgrade_deadline_height": netlithic_version.UPGRADE_DEADLINE_HEIGHT,
                         "points_v3_rules": points_v3_rules_hash(),   # name kept for older tools; it now fingerprints the v4 rules
                         "points_rules": points_v3_rules_hash(),
+                        "difficulty_rules": difficulty_rules_hash(),
                         **blockchain.reorg_info(),
                         "security_fork_height": SECURITY_FORK_HEIGHT,
                         "fork_ready": True,
@@ -1233,7 +1525,8 @@ class P2PHandler(BaseHTTPRequestHandler):
             if not peer_address_allowed(normalized):  # review R1: before any fetch
                 raise ValueError("Peer address not allowed (private, loopback, link-local or unresolvable); "
                                  "set NETLITHIC_ALLOW_PRIVATE_PEERS=1 for a local test network")
-            reason = _gate_check_url(normalized, strict=False)    # review F2: unreachable allowed (admin's choice)
+            # A peer that never answers /status within the hello timeout is not added.
+            reason = _gate_check_url(normalized, strict=True)
             if reason:
                 raise ValueError(reason)
             with state_lock:  # address already checked above, outside the lock (P5-1)
@@ -1276,7 +1569,7 @@ class P2PHandler(BaseHTTPRequestHandler):
             known = url in peers
 
         try:
-            status = _get_json(f"{url}/status", timeout=HELLO_TIMEOUT_SECONDS)
+            status = _get_json(f"{url}/status", timeout=HELLO_TIMEOUT_SECONDS, deadline_seconds=HELLO_TIMEOUT_SECONDS)
             reported = _normalize_peer(status.get("node"))
         except Exception:
             if known:       # a known peer that is briefly unreachable stays; the sync loop copes with dead peers
@@ -1421,8 +1714,23 @@ class P2PHandler(BaseHTTPRequestHandler):
         except Exception:
             return _json_response(self, 400, {"error": "Invalid miner_address"})
 
+        # The nonce search runs OUTSIDE state_lock, so a mining node keeps answering /status, /receive_block and sync.
+        # mine_lock keeps one search at a time, as the old single lock did (a second /mine waits its turn).
+        with mine_lock:
+            with state_lock:
+                template = blockchain.build_block_template(miner_address, mempool)
+            tip_hash = template["previous_hash"]
+
+            def _tip_moved():
+                return blockchain.get_latest_block().hash != tip_hash   # lock-free read of the last list item
+
+            block = blockchain.solve_block_template(template, should_abort=_tip_moved)
+            if block is None:
+                return _json_response(self, 409, {"error": "Chain tip moved while mining; retry"})
+
         with state_lock:
-            block = blockchain.mine_block(miner_address, mempool)
+            if blockchain.get_latest_block().hash != tip_hash:
+                return _json_response(self, 409, {"error": "Chain tip moved while mining; retry"})
 
             added = blockchain.add_block(block.to_dict())
             if not added:
@@ -1601,6 +1909,20 @@ def _warn_pause_key():
     return problem
 
 
+class HealthHandler(P2PHandler):
+    """Status only: the health listener never serves /chain (up to 16 MiB), admin or POST routes."""
+    HEALTH_PATHS = ("/status", "/health")
+
+    def do_GET(self):
+        if urlparse(self.path).path not in self.HEALTH_PATHS:
+            return _json_response(self, 404, {"error": "Not found"})
+        self.path = "/status"
+        return super().do_GET()
+
+    def do_POST(self):
+        return _json_response(self, 404, {"error": "Not found"})
+
+
 def run_server(host: str = HOST, port: int = PORT, advertise_url: str = None, extra_peers=()):
     # Review F4: a broken config/checkpoints.json must stop the node loudly,
     # not silently run with no checkpoints.
@@ -1616,13 +1938,21 @@ def run_server(host: str = HOST, port: int = PORT, advertise_url: str = None, ex
     ADVERTISE_URL = _normalize_peer(advertise_url) if advertise_url else None
 
     _load_peers()
+    CONFIGURED_PEER_URLS.update(p for p in extra_peers if isinstance(p, str))
     _add_extra_peers(extra_peers)
     _load_mempool()
     _remove_confirmed_txs_from_mempool()
     _revalidate_mempool()
     _start_sync_thread()
 
-    server = ThreadingHTTPServer((HOST, PORT), P2PHandler)
+    server = P2PServer((HOST, PORT), P2PHandler, reserved_ips=_reserved_ips())
+    print(f"Trusted addresses: {sorted(server.reserved_ips)}")
+    _report_trusted_proxies(server)
+    health_port = _env_int("NETLITHIC_HEALTH_PORT", 0)
+    if health_port:
+        _start_health_listener(health_port)
+        print(f"Health listener on http://127.0.0.1:{health_port}")
+    threading.Thread(target=_keep_reserved_ips_fresh, args=(server,), daemon=True).start()
     for p in list(peers):
         # once we're listening (so peers can verify us), say hello to known peers
         threading.Thread(target=_introduce_to, args=(p,), daemon=True).start()

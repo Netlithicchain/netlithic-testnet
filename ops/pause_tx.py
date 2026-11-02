@@ -1,4 +1,4 @@
-"""Build a signed payout pause/resume tx (run on the key holder's own offline machine).
+"""Build a signed payout pause/resume tx (run on the founder's own offline machine).
 
     python ops/pause_tx.py pause  "Reason shown publicly" --nonce 1 --chain-id netlithic-dev-1 > pause.json
     python ops/pause_tx.py renew  "Still investigating"   --nonce 2 --chain-id netlithic-dev-1 > renew.json

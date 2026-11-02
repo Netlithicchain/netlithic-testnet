@@ -1,5 +1,6 @@
 import argparse
 import json
+import strict_json
 from urllib.error import HTTPError
 from urllib.request import Request
 from netutil import urlopen
@@ -23,11 +24,11 @@ def post_json(url: str, payload: dict):
     try:
         with urlopen(req, timeout=10) as resp:
             body = resp.read().decode("utf-8")
-            return resp.status, json.loads(body) if body else {}
+            return resp.status, strict_json.loads(body) if body else {}
     except HTTPError as e:
         body = e.read().decode("utf-8")
         try:
-            parsed = json.loads(body) if body else {}
+            parsed = strict_json.loads(body) if body else {}
         except Exception:
             parsed = {"raw": body}
         return e.code, parsed
@@ -37,7 +38,7 @@ def get_json(url: str):
     req = Request(url, headers={"Accept": "application/json"})
     with urlopen(req, timeout=10) as resp:
         body = resp.read().decode("utf-8")
-        return json.loads(body) if body else {}
+        return strict_json.loads(body) if body else {}
 
 
 def main():

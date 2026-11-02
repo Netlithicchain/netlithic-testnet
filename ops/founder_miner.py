@@ -26,6 +26,19 @@ import time
 from urllib.request import Request, urlopen
 
 
+def _strict_loads(text):
+    """Strict JSON parsing (kept inline so this script runs on its own): plain JSON numbers only."""
+    def bad_const(name):
+        raise ValueError(f"number constant {name} not allowed")
+
+    def finite(t):
+        v = float(t)
+        if v != v or v in (float("inf"), float("-inf")):
+            raise ValueError("number out of range")
+        return v
+    return json.loads(text, parse_constant=bad_const, parse_float=finite)
+
+
 def _safe_urlopen(req, *a, **kw):
     """urlopen limited to http/https (bandit B310)."""
     from urllib.parse import urlparse as _up
@@ -57,7 +70,7 @@ def decide(height, latest_timestamp, now, last_own_mine, stop_height=5000, backs
 
 def _get(url, timeout=15):
     with _safe_urlopen(Request(url, headers={"Accept": "application/json"}), timeout=timeout) as r:
-        return json.loads(r.read().decode() or "{}")
+        return _strict_loads(r.read().decode() or "{}")
 
 
 def main(argv=None):
@@ -93,7 +106,7 @@ def main(argv=None):
     req = Request(node + "/mine", data=json.dumps({"miner_address": a.miner}).encode(), method="POST",
                   headers={"Content-Type": "application/json", **({"X-Admin-Token": token} if token else {})})
     with _safe_urlopen(req, timeout=600) as r:
-        b = json.loads(r.read().decode() or "{}").get("block", {})
+        b = _strict_loads(r.read().decode() or "{}").get("block", {})
     print(f"made block {b.get('index')} for {a.miner}")
     if int(st["height"]) + 1 >= a.stop_height:
         try:

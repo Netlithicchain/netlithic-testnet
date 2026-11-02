@@ -51,21 +51,28 @@ def _wait(pred, timeout=40, what="condition"):
     raise AssertionError(f"timed out waiting for {what}")
 
 
+STARTUP_WAIT_SECONDS = 60     # generous: a loaded box can be slow to start a node
+
+
 class Cluster:
     def __init__(self, tmp_path, pub, n_new=3, n_old=0):
         self.tmp, self.pub, self.procs, self.ports = tmp_path, pub, {}, []
         self.old = []
-        for _ in range(n_new):
-            self.ports.append(self.start())
-        for _ in range(n_old):
-            p = self.start(old=True)
-            self.ports.append(p)
-            self.old.append(p)
-        # fully connect (admin add_peer both ways)
-        for a in self.ports:
-            for b in self.ports:
-                if a != b:
-                    _req(a, "/add_peer", {"peer": f"http://127.0.0.1:{b}"}, admin=True)
+        try:
+            for _ in range(n_new):
+                self.ports.append(self.start())
+            for _ in range(n_old):
+                p = self.start(old=True)
+                self.ports.append(p)
+                self.old.append(p)
+            # fully connect (admin add_peer both ways)
+            for a in self.ports:
+                for b in self.ports:
+                    if a != b:
+                        _req(a, "/add_peer", {"peer": f"http://127.0.0.1:{b}"}, admin=True)
+        except BaseException:
+            self.close()    # never leave drill nodes running when setup fails
+            raise
 
     def start(self, old=False, port=None, data=None):
         port = port or free_port()
@@ -77,7 +84,7 @@ class Cluster:
             [sys.executable, LAUNCHER, str(port), "--data-dir", data],
             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.data = getattr(self, "data", {}); self.data[port] = data
-        _wait(lambda: self.alive(port), 20, f"node {port}")
+        _wait(lambda: self.alive(port), STARTUP_WAIT_SECONDS, f"node {port}")
         return port
 
     def alive(self, port):
@@ -221,3 +228,29 @@ def test_http_drill_old_version_node_splits_off_at_the_pause_block(tmp_path, wal
         assert _req(a, "/status")[1]["latest_hash"] != _req(old, "/status")[1]["latest_hash"]
     finally:
         cl.close()
+
+
+def test_cluster_stops_its_nodes_when_setup_fails(tmp_path, monkeypatch):
+    """A node that never comes up must not leave the ones already started running."""
+    started = []
+    real_popen = subprocess.Popen
+
+    def popen(*a, **kw):
+        p = real_popen([sys.executable, "-c", "import time; time.sleep(600)"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        started.append(p)
+        return p
+
+    calls = {"n": 0}
+
+    def wait(pred, timeout=40, what="condition"):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise AssertionError(f"timed out: {what}")
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(sys.modules[__name__], "_wait", wait)
+    with pytest.raises(AssertionError):
+        Cluster(tmp_path, "00" * 32)
+    assert len(started) == 2
+    assert all(p.poll() is not None for p in started)

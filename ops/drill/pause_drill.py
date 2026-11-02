@@ -128,7 +128,7 @@ def main():
         pause.PAUSE_PUBKEY = pub
         check("keyed node accepts the pause tx", bool(bc.validate_candidate_tx_against_chain_and_mempool(tx0, [])))
         check("only one pause tx at a time in the mempool", not bc.validate_candidate_tx_against_chain_and_mempool(tx0, [tx0]))
-        wrong_key = pause.make_pause_tx(other_priv, True, "not the key holder", 1, cid)
+        wrong_key = pause.make_pause_tx(other_priv, True, "not the founder", 1, cid)
         check("wrong key rejected", not bc.validate_candidate_tx_against_chain_and_mempool(wrong_key, []))
         check("wrong nonce rejected", not bc.validate_candidate_tx_against_chain_and_mempool(
             sign(pause_tx, priv, "pause", "skipped a nonce", 2, cid), []))

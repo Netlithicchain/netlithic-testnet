@@ -218,7 +218,7 @@ def test_n1_a_chain_that_ran_out_of_budget_counts_as_unvalidated_not_as_an_alert
 
 
 def test_n1_status_endpoint_and_healthcheck_carry_the_counter(node):
-    with urllib.request.urlopen(f"{node.self_url()}/status") as r:
+    with urllib.request.urlopen(f"{node.self_url()}/status", timeout=10) as r:
         st = json.loads(r.read())
     assert st["refused_unvalidated_deep_reorgs_24h"] == 0
     assert st["refused_unvalidated_deep_reorgs_total"] == 0
@@ -238,7 +238,7 @@ def test_n1_healthcheck_run_reports_the_counter_without_raising_an_alert():
     cfg["faucet_info_url"] = ""
     cfg["cert_hosts"] = []
     cfg["disk_paths"] = []
-    status = {"height": 10, "version": H.DEFAULTS.get("expected_version") or "0.5.3", "fork_ready": True,
+    status = {"height": 10, "version": H.DEFAULTS.get("expected_version") or "0.5.4", "fork_ready": True,
               "refused_unvalidated_deep_reorgs_24h": 7, "latest_hash": "x"}
     problems, state = H.run_checks(cfg, {}, now=1000.0, fetch=lambda url: status)
     assert not [k for k in problems if k.startswith("deep_reorg")]

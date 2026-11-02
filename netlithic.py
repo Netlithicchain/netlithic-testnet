@@ -7,6 +7,7 @@
 """
 import argparse
 import json
+import strict_json
 import os
 import sys
 from urllib.error import HTTPError, URLError
@@ -37,10 +38,10 @@ def _request(url, payload=None, headers=None):
                            **(headers or {})})
     try:
         with urlopen(req, timeout=120) as resp:
-            return json.loads(resp.read().decode("utf-8") or "{}")
+            return strict_json.loads(resp.read().decode("utf-8") or "{}")
     except HTTPError as e:
         try:
-            body = json.loads(e.read().decode("utf-8") or "{}")
+            body = strict_json.loads(e.read().decode("utf-8") or "{}")
         except Exception:
             body = {}
         detail = body.get("reason") or body.get("error") or ""

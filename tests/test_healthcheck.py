@@ -26,7 +26,7 @@ def fetcher(heights, faucet=1000):
             if url.startswith(node):
                 if h is None:
                     raise OSError("down")
-                return {"height": h, "version": "0.5.3", "fork_ready": True, "latest_hash": f"h{h}",
+                return {"height": h, "version": "0.5.4", "fork_ready": True, "latest_hash": f"h{h}",
                         "pause_key_id": "2a83f37a4ce7a269"}
         raise OSError("unknown")
     return fetch

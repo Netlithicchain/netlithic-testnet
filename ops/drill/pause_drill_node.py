@@ -26,6 +26,12 @@ import economics as eco          # noqa: E402
 import pause                     # noqa: E402
 import contributions             # noqa: E402
 
+# The drill scales constants that difficulty_rules_hash() now covers (fork height, adjustment interval), and it needs an
+# "old" node (fork pushed out of reach) to still shake hands with the others. So every drill node reports the fingerprint of
+# the real, unscaled rules. Production nodes never run this file.
+_REAL_DIFFICULTY_RULES = core.difficulty_rules_hash()
+core.difficulty_rules_hash = lambda: _REAL_DIFFICULTY_RULES
+
 fork = int(os.environ.get("DRILL_SEC_FORK", "3"))
 epoch = int(os.environ.get("DRILL_EPOCH_LEN", "4"))
 core.SECURITY_FORK_HEIGHT = fork

@@ -7,12 +7,12 @@ A, B, P = "http://127.0.0.1:8000", "http://127.0.0.1:8001", "http://203.0.113.5:
 CHAIN = [{"index": i, "hash": f"x{i}"} for i in range(500)]
 
 
-def st(h=480, v="0.5.3", tip=None, peers=(), ready=True, node=None):
+def st(h=480, v="0.5.4", tip=None, peers=(), ready=True, node=None):
     return {"pause_key_id": "2a83f37a4ce7a269", "height": h, "version": v, "fork_ready": ready, "latest_hash": tip or f"x{h}",
-            "peers": list(peers), "min_peer_version": "0.5.3", "upgrade_deadline_height": 4900, "node": node}
+            "peers": list(peers), "min_peer_version": "0.5.4", "upgrade_deadline_height": 4900, "node": node}
 
 
-def make_fetch(peer_v="0.5.3", chain=CHAIN, pause=None):
+def make_fetch(peer_v="0.5.4", chain=CHAIN, pause=None):
     def f(url):
         if url.endswith("/chain"):
             return {"chain": chain}
@@ -125,3 +125,33 @@ def test_blank_pause_key_warning_repeats_only_every_repeat_minutes(tmp_path):
     assert out == []
     out, state = H.plan_alerts(problems, state, c, 1000.0 + 360 * 60)   # after repeat_minutes: once more
     assert len(out) == 1
+
+
+def _rules(**per_node):
+    return {n: {**st(node=n), **({"difficulty_rules": v} if v is not None else {})} for n, v in per_node.items()}
+
+
+def test_difficulty_rules_same_on_both_nodes_is_quiet(tmp_path):
+    p, _ = chk(cfg(tmp_path), _rules(**{A: "ab" * 32, B: "ab" * 32}))
+    assert "difficulty_rules_differ" not in p
+
+
+def test_difficulty_rules_that_differ_between_our_nodes_raise_an_alert(tmp_path):
+    p, _ = chk(cfg(tmp_path), _rules(**{A: "ab" * 32, B: "cd" * 32}))
+    assert "difficulty_rules_differ" in p
+    assert A in p["difficulty_rules_differ"] and B in p["difficulty_rules_differ"] and "abababababab" in p["difficulty_rules_differ"]
+
+
+def test_difficulty_rules_missing_on_one_node_counts_as_different(tmp_path):
+    p, _ = chk(cfg(tmp_path), _rules(**{A: "ab" * 32, B: None}))
+    assert "none reported" in p["difficulty_rules_differ"]
+
+
+def test_difficulty_rules_not_reported_by_any_node_is_left_to_the_version_check(tmp_path):
+    p, _ = chk(cfg(tmp_path), _rules(**{A: None, B: None}))
+    assert "difficulty_rules_differ" not in p
+
+
+def test_difficulty_rules_compare_ignores_letter_case_and_spaces(tmp_path):
+    p, _ = chk(cfg(tmp_path), _rules(**{A: "AB" * 32, B: " " + "ab" * 32 + " "}))
+    assert "difficulty_rules_differ" not in p

@@ -15,16 +15,17 @@
 import argparse
 import html
 import json
+import strict_json
 import os
 import stat
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request
-from netutil import urlopen
+from netutil import urlopen, CappedThreadingHTTPServer
 
 from node_pool import DEFAULT_FALLBACK, NodePool, parse_nodes
 
@@ -266,7 +267,7 @@ def make_handler(faucet, trust_proxy=False):
             raw = self.rfile.read(n).decode("utf-8", "replace")
             if path == "/api/drip":
                 try:
-                    address = json.loads(raw or "{}").get("address")
+                    address = strict_json.loads(raw or "{}").get("address")
                 except Exception:
                     return self.json(400, {"error": "Invalid JSON"})
             else:
@@ -318,7 +319,9 @@ def main(argv=None):
         return 1
     print(f"Netlithic TESTNET faucet on {cid}; faucet address {w.address}")
     print(f"Listening on http://{args.host}:{args.port} (test coins have no value)")
-    ThreadingHTTPServer((args.host, args.port), make_handler(faucet, args.trust_proxy)).serve_forever()
+    handler = make_handler(faucet, args.trust_proxy)
+    handler.timeout = 20        # drop clients that go quiet
+    CappedThreadingHTTPServer((args.host, args.port), handler, max_connections=128).serve_forever()
 
 
 if __name__ == "__main__":

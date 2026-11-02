@@ -16,6 +16,7 @@ TEST NETWORK ONLY: test coins have no value.
 import argparse
 import json
 import logging
+import math
 import logging.handlers
 import os
 import re
@@ -24,21 +25,38 @@ import subprocess
 import sys
 import threading
 import time
-from http.server import ThreadingHTTPServer
 from urllib.parse import urlparse
 
 FROZEN = getattr(sys, "frozen", False)
 CODE_ROOT = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, CODE_ROOT)
 import netlithic_version  # noqa: E402
+import strict_json  # noqa: E402
 import webwallet  # noqa: E402
+from netutil import CappedThreadingHTTPServer  # noqa: E402
 
 DESKTOP_STATIC = os.path.join(CODE_ROOT, "desktop", "static")
 PUBLIC_SITE = os.environ.get("NETLITHIC_PUBLIC_SITE", "https://testnet.netlithicchain.com").rstrip("/")
 # Public seed nodes, tried in order. NETLITHIC_SEED_URLS (comma-separated) overrides;
 # the old single NETLITHIC_SEED_URL still works. Node 1 = netlithic-testnet-1,
-# node 2 = netlithic-testnet-2 (relay only).
+# node 2 = netlithic-testnet-2 (relay only; see docs/STURDY_TESTNET.md).
 DEFAULT_SEEDS = ["http://137.184.199.238:8000", "http://157.230.63.97:8000"]
+
+
+# Display-only anchors: {height: block hash} of already-final blocks, each read
+# identically from both public seeds when the release was built. The app never says "up to date" unless
+# our chain (and, when it can tell, the seeds' chain) runs through every anchor at or below its tip.
+# This changes only what the app SHOWS; which blocks are valid is unchanged (that is config/checkpoints.json).
+# 1400: verified 2026-10-30 on 137.184.199.238 and 157.230.63.97 via GET /chain (chain_id netlithic-dev-1).
+# If the network's newest block is older than this, the app does not say "up to date" (it may be cut off from
+# the real network, or the network may be stalled). Mining still continues, so a quiet network can recover.
+STALE_TIP_SECONDS = 30 * 60
+# A tip block dated further ahead than this is not trusted as a time (the app shows "checking").
+MAX_TIP_AHEAD_SECONDS = 2 * 60 * 60
+
+DESKTOP_ANCHORS = {
+    1400: "0081b82c214bbabd4b3ce52adaef6fe2c5d0cd0380b994d94d594399e22ac84f",
+}
 
 
 def parse_seeds(value):
@@ -58,10 +76,23 @@ UI_PORT = int(os.environ.get("NETLITHIC_UI_PORT", "47100"))      # fixed so the 
 NODE_PORT = int(os.environ.get("NETLITHIC_NODE_PORT", "47101"))
 ADDRESS_RE = re.compile(r"^[0-9a-f]{32}$")
 EXPLORER_PATH = re.compile(r"^/explorer(/[A-Za-z0-9._~%-]*)*/?$")
-SYNC_SLACK = 1
 # Pause between blocks. Test-network difficulty is very low right now, so without a
-# pause one PC could add hundreds of empty blocks a minute. The policy is a founder decision.
-MINE_PACE_SECONDS = float(os.environ.get("NETLITHIC_MINE_PACE", "60"))  # within one block of the seed counts as "up to date"
+# pause one PC could add hundreds of empty blocks a minute. The pause length is a policy choice.
+MINE_PACE_SECONDS = float(os.environ.get("NETLITHIC_MINE_PACE", "60"))
+
+
+def _int_or_none(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+# How often (seconds) a paused loop looks at the network again, how often it nudges
+# its own node to pull from the seeds, and how many blocks it hands a seed per visit.
+RECHECK_SECONDS = 5.0
+PULL_MIN_SECONDS = 10.0
+RELAY_MAX_BLOCKS = 3
 
 
 def default_data_dir(platform=None, env=None, home=None):
@@ -197,8 +228,10 @@ def duration_words(seconds):
 class Earner:
     """Owns the local node process and the mining loop. Knows only an address."""
 
-    def __init__(self, local_node, seeds, call, admin_token=None, pace=None, stats=None):
+    def __init__(self, local_node, seeds, call, admin_token=None, pace=None, stats=None, anchors=None, clock=None):
         self.local, self.call = local_node.rstrip("/"), call
+        self.clock = clock or time.time
+        self.anchors = dict(DESKTOP_ANCHORS if anchors is None else anchors)
         self.stats = stats
         self.seeds = parse_seeds(seeds)
         self.seed = self.seeds[0]  # last seed that answered
@@ -213,50 +246,147 @@ class Earner:
         self.pace = MINE_PACE_SECONDS if pace is None else pace
         self._wake = threading.Event()
 
-    # -- status in plain words
-    def heights(self):
+    # -- where is our copy of the chain compared with the public seeds?
+    def _get(self, url):
+        """GET/POST helper: (code, dict) or (None, {}) when nothing answered."""
         try:
-            c1, mine = self.call(self.local + "/status")
-            local = int(mine.get("height")) if c1 == 200 else None
+            code, data = self.call(url)
         except Exception:
-            local = None
-        network = self.network_height()
-        return local, network
+            return None, {}
+        return code, data if isinstance(data, dict) else {}
+
+    def _survey(self):
+        """-> (local /status or None, [(seed, /status)] for the seeds that answered).
+        The seed that answered last is asked first; if it is down, the others
+        are tried in order (fallback)."""
+        code, mine = self._get(self.local + "/status")
+        local = mine if code == 200 and _int_or_none(mine.get("height")) is not None else None
+        order = [self.seed] + [s for s in self.seeds if s != self.seed]
+        seen = []
+        for seed in order:
+            code, net = self._get(seed + "/status")
+            if code != 200 or _int_or_none(net.get("height")) is None:
+                continue
+            if local and net.get("chain_id") and local.get("chain_id") and net["chain_id"] != local["chain_id"]:
+                continue  # a seed on another network says nothing about ours
+            if not seen:
+                self.seed, self.seed_status = seed, net
+            seen.append((seed, net))
+        return local, seen
+
+    def heights(self):
+        local, seen = self._survey()
+        return (_int_or_none(local.get("height")) if local else None), \
+            (max(int(n["height"]) for _s, n in seen) if seen else None)
 
     def network_height(self):
-        """Highest height any seed reports. The seed that answered last is asked
-        first; if it is down, the others are tried in order (fallback)."""
-        order = [self.seed] + [s for s in self.seeds if s != self.seed]
-        best = None
-        for seed in order:
-            try:
-                code, net = self.call(seed + "/status")
-                h = int(net.get("height")) if code == 200 else None
-                if code == 200 and best is None:
-                    self.seed_status = net
-            except Exception:
-                h = None
-            if h is not None:
-                if best is None:
-                    self.seed = seed
-                best = h if best is None else max(best, h)
-        return best
+        return self.heights()[1]
+
+    def _local_block(self, index):
+        """One block of our own node's chain (None if it has none there). Used for the release anchor, for our
+        tip's time, and when we are AHEAD of the seeds, to see whether our extra blocks sit on their chain."""
+        code, data = self._get(f"{self.local}/block?index={int(index)}")
+        blk = data.get("block") if code == 200 else None
+        return blk if isinstance(blk, dict) else None
+
+    def _anchor_check(self, lh, seen):
+        """'ok', 'mismatch' (a chain has a different block at an anchor height) or 'unknown' (an anchor block
+        that should exist could not be read from our node or from a seed). Unknown never counts as up to date."""
+        unknown = False
+        for h, want in sorted(self.anchors.items()):
+            if lh is not None and lh >= h:
+                blk = self._local_block(h)
+                if blk is None:
+                    unknown = True
+                elif blk.get("hash") != want:
+                    return "mismatch"
+            for seed, net in seen:
+                if _int_or_none(net.get("height")) is not None and int(net["height"]) >= h:
+                    code, data = self._get(f"{seed}/block?index={int(h)}")
+                    blk = data.get("block") if code == 200 else None
+                    if not isinstance(blk, dict):
+                        unknown = True
+                    elif blk.get("hash") != want:
+                        return "mismatch"
+        return "unknown" if unknown else "ok"
+
+    def _tip_age(self, lh, tip_hash):
+        """Seconds since our own validated tip block was made, or None if that time can't be trusted:
+        unreadable, not a plain finite number, or more than MAX_TIP_AHEAD_SECONDS in the future."""
+        blk = self._local_block(lh) if lh is not None else None
+        if not isinstance(blk, dict) or blk.get("hash") != tip_hash:
+            return None
+        t = blk.get("timestamp")
+        if isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t):
+            return None
+        age = self.clock() - float(t)
+        if not math.isfinite(age) or age < -MAX_TIP_AHEAD_SECONDS:
+            return None
+        return age
+
+    def position(self):
+        """Compare our tip (height AND block hash) with the seeds' tip.
+        Returns (state, local_height, network_height, words, seen) where state is one of
+        starting / offline / behind / ok / ahead_waiting / forked / seeds_disagree."""
+        local, seen = self._survey()
+        lh = _int_or_none(local.get("height")) if local else None
+        if local is None:
+            return "starting", None, None, "Starting your node...", seen
+        if not seen:
+            return "offline", lh, None, "Can't reach the test network right now. Check your internet.", seen
+        nh = max(int(n["height"]) for _s, n in seen)
+        tops = {n.get("latest_hash") for _s, n in seen if int(n["height"]) == nh}
+        top = next(iter(tops)) if len(tops) == 1 else None
+        if local.get("checkpoints_ok") is False:
+            return "forked", lh, nh, ("Not on the network: your copy of the chain disagrees with the "
+                                      "network's fixed checkpoints. Helping is paused."), seen
+        anchor = self._anchor_check(lh, seen)
+        if anchor == "mismatch":
+            return "forked", lh, nh, ("Not on the network: this chain does not match the blocks built into this "
+                                      "release. Helping is paused; your wallet and coins are safe."), seen
+        if lh < nh:
+            return "behind", lh, nh, f"Catching up with the network: block {lh} of {nh}.", seen
+        if len(tops) > 1 or not top:
+            return "seeds_disagree", lh, nh, ("The network's servers don't agree on the latest block right now. "
+                                             "Helping is paused until they do."), seen
+        if lh == nh:
+            if local.get("latest_hash") == top:
+                if anchor == "unknown":
+                    return "checking", lh, nh, ("Checking the network's chain against the blocks built into this "
+                                                "release. Helping waits until that check works."), seen
+                age = self._tip_age(lh, top)
+                if age is None:
+                    return "checking", lh, nh, ("Checking the time of the newest block. Helping waits until "
+                                                "that check works."), seen
+                if age > STALE_TIP_SECONDS:
+                    return "stale", lh, nh, (f"No new block on the network for {int(age // 60)} minutes (block {lh}). "
+                                             "Either the network is quiet or you are cut off from it, so this is not "
+                                             "shown as up to date. Helping can keep going."), seen
+                words = f"Connected and up to date (block {lh})."
+                if len({sd for sd, _n in seen}) < len(self.seeds):
+                    words += f" Only {len(seen)} of {len(self.seeds)} network servers answered."
+                return "ok", lh, nh, words, seen
+            return "forked", lh, nh, (f"Not on the network: your block {lh} is different from the network's block {lh}. "
+                                      "Helping is paused until the network moves past it."), seen
+        # we are AHEAD of every seed: fine only if our chain runs through the seeds' tip
+        at = self._local_block(nh)
+        if at is not None and at.get("hash") == top:
+            return "ahead_waiting", lh, nh, ("Waiting for the network to accept your latest block "
+                                             f"(you are at block {lh}, the network at {nh})."), seen
+        return "forked", lh, nh, (f"Not on the network: you are at block {lh} but your chain is not the one the network "
+                                  f"is on (it is at block {nh}). Helping is paused; your wallet and coins are safe.")\
+            , seen
 
     def status(self):
-        local, network = self.heights()
-        if local is None:
-            sync, synced = "Starting your node...", False
-        elif network is None:
-            sync, synced = "Can't reach the test network right now. Check your internet.", False
-        elif local + SYNC_SLACK >= network:
-            sync, synced = f"Connected and up to date (block {local}).", True
-        else:
-            sync, synced = f"Catching up with the network: block {local} of {network}.", False
+        state, local, network, sync, seen = self.position()
+        synced = state == "ok"
+        can_help = state in ("ok", "stale")  # a quiet network still needs miners to move again
         notice = upgrade_notice(getattr(self, "seed_status", None))
         if notice:
             sync = notice + " " + sync
         out = {"upgrade_needed": bool(notice), "earning": self.running, "address": self.address, "blocks_found": self.blocks_found,
-               "synced": synced, "sync": sync, "local_height": local, "network_height": network,
+               "synced": synced, "on_network": synced, "can_help": can_help, "network_state": state,
+               "sync": sync, "local_height": local, "network_height": network,
                "message": self.last_error}
         if self.stats is not None:
             self.stats.tick(self.running)
@@ -266,7 +396,7 @@ class Earner:
     def start(self, address):
         if not ADDRESS_RE.fullmatch(address or ""):
             raise ValueError("That address doesn't look right.")
-        if not self.status()["synced"]:
+        if not self.status()["can_help"]:
             raise ValueError("Please wait until your node has caught up with the network.")
         with self.lock:
             self.address = address
@@ -302,15 +432,70 @@ class Earner:
         self.last_error = "Someone else found that block first. Still trying."
         return False
 
+    def pull(self):
+        """Ask our own node to pull from its seeds now (it also does so every few
+        seconds by itself). The node takes a longer valid chain only after full
+        validation (rules, checkpoints, pause state, work); we never hand it blocks."""
+        now = time.time()
+        if now - getattr(self, "_last_pull", 0.0) < PULL_MIN_SECONDS:
+            return False
+        self._last_pull = now
+        try:
+            self.call(self.local + "/sync", {})
+        except Exception:
+            return False
+        return True
+
+    def relay(self, seen):
+        """Our node's blocks reach a seed only if our node could push them (it can, from
+        behind a home router, because it makes the connection) AND the seed took them. When
+        a seed is still one or more blocks behind our tip, hand it the next block(s) that
+        extend ITS tip, as any peer may. Nothing here lets a seed fetch from us."""
+        sent = 0
+        for seed, net in seen:
+            h = _int_or_none(net.get("height"))
+            at = self._local_block(h) if h is not None else None
+            if at is None or at.get("hash") != net.get("latest_hash"):
+                continue  # that seed is on another chain; it can only be moved by work, not by us
+            for i in range(h + 1, h + 1 + RELAY_MAX_BLOCKS):
+                blk = self._local_block(i)
+                if blk is None:
+                    break
+                try:
+                    code, _ = self.call(seed + "/receive_block", {"block": blk, "chain_id": net.get("chain_id")})
+                except Exception:
+                    break
+                if code != 200:
+                    break
+                sent += 1
+        return sent
+
+    def step(self):
+        """One turn of the loop. Mines only when our tip IS the network's tip; otherwise
+        it pulls, re-sends or just waits (returns the seconds to wait)."""
+        state, _lh, _nh, words, seen = self.position()
+        if state in ("ok", "stale"):
+            self.mine_once()
+            return self.pace
+        if state in ("behind", "forked", "seeds_disagree", "checking"):
+            self.pull()
+        elif state == "ahead_waiting":
+            self.relay(seen)
+            self.pull()
+        self.last_error = words
+        return min(self.pace, RECHECK_SECONDS)
+
     def _loop(self):
         while self.running:
+            wait = self.pace
             try:
-                self.mine_once()
+                wait = self.step()
             except Exception:
                 self.last_error = "Your node didn't answer. Retrying..."
+                wait = min(self.pace, RECHECK_SECONDS)
             if self.stats is not None:
                 self.stats.tick(self.running)
-            self._wake.wait(self.pace)
+            self._wake.wait(wait)
 
 
 def make_desktop_handler(up, earner):
@@ -415,7 +600,7 @@ def check_backup(text):
     else, such as a bare key, is refused so it can never be written out by mistake."""
     if not isinstance(text, str) or len(text) > 8192:
         raise ValueError("That isn't a Netlithic backup file.")
-    blob = json.loads(text)
+    blob = strict_json.loads(text)
     if (not isinstance(blob, dict) or set(blob) != BACKUP_KEYS or blob.get("format") != "netlithic-wallet-backup"
             or blob.get("kdf") != "PBKDF2-SHA256" or not ADDRESS_RE.fullmatch(str(blob.get("address")))
             or not re.fullmatch(r"[0-9a-f]{64,}", str(blob.get("ciphertext")))):
@@ -681,7 +866,9 @@ def main(argv=None):
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     proc = subprocess.Popen(node_command(os.path.join(a.data_dir, "node"), a.node_port, a.seed),
                             env=env, stdout=node_log, stderr=subprocess.STDOUT, creationflags=flags)
-    server = ThreadingHTTPServer(("127.0.0.1", a.ui_port), make_desktop_handler(up, earner))
+    handler = make_desktop_handler(up, earner)
+    handler.timeout = 20        # drop clients that go quiet
+    server = CappedThreadingHTTPServer(("127.0.0.1", a.ui_port), handler, max_connections=64)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{a.ui_port}/"
     if a.no_window:

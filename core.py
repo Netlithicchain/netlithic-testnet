@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import pause
+import strict_json
 import registry
 from wallet import verify_signed_tx, pubkey_to_address, multisig_message, verify_signature
 import contributions
@@ -39,31 +40,79 @@ MAX_BLOCK_TXS = 1000  # signed transfers per block; miners fill it highest-fee f
 # constants, not genesis settings, so the genesis economics_sha256 is unchanged.
 LWMA_FORK_HEIGHT = 5000
 LWMA_TARGET_BLOCK_TIME = 60        # seconds per block after the fork
-LWMA_WINDOW = 45                   # blocks in the average
+LWMA_WINDOW = 60                   # blocks in the average
 LWMA_MIN_WORK = 256                # = old difficulty 2 (two leading hex zeros)
+# Work of the FIRST block from the fork height on, instead of carrying over the old floor: a deliberately LOW
+# estimate of the network's hashes per second times the target block time. Too low costs little (a few quick
+# blocks while the average catches up); too high stalls the chain for minutes. 0 = carry over the previous work.
+LWMA_SEED_WORK = 9_600_000         # about half of one 60 s block of the measured 320,000 hashes per second (low on purpose)
+# Notes for the seed (also in docs/PR text):
+#  * The 320,344 hashes per second is the founder's own benchmark (hashrate_bench.py, one run of the real nonce loop
+#    on his PC). An older measurement in RESULTS.md found about 56,000 hashes per second for a single core, so the
+#    real network rate is uncertain; that is why the seed is kept low and why a stall can never freeze the chain.
+#  * The stall rule below measures from the latest of the last blocks, and block 4999 is the newest block when block
+#    5000 is made. Old blocks come about 10 minutes apart, so block 5000 may already use the emergency work
+#    (the seed divided by STALL_WORK_DIVISOR = 8, i.e. 9.6M / 8 = 1.2M) instead of the seed. That is harmless and it
+#    errs on the safe side (easier, never stuck): at the assumed rate about 22 blocks arrive in the first 10 minutes
+#    instead of 10, and the work settles after about 40 blocks.
 LWMA_MAX_STEP_UP = (3, 2)          # next work <= 1.5x previous
 LWMA_MAX_STEP_DOWN = (2, 3)        # next work >= 2/3 previous
 LWMA_MAX_SOLVETIME_FACTOR = 6      # one solve time counts as at most 6 targets
 MTP_WINDOW = 11                    # median-time-past window (after the fork)
 STALL_SECONDS = 10 * LWMA_TARGET_BLOCK_TIME  # a block this late may use emergency work
 STALL_WORK_DIVISOR = 8
+# Names the timestamp rule in difficulty_rules_hash(): every block timestamp must be a finite number, at every height
+# (see block_reject_reason). Timestamps are compared and hashed as IEEE 754 doubles. Change the tag if the rule changes.
+TIMESTAMP_RULE_TAG = "finite-all-heights"
 POW_LIMIT = 2 ** 256
 
 # ---- Security fork (same height as LWMA; every node must upgrade before it) ----
 # From SECURITY_FORK_HEIGHT: reorg depth limit, checkpoints, stricter stall rule,
-# anti-farming v2 for points. See docs/CONFIRMATIONS.md.
+# anti-farming v2 for points. See docs/THREAT_MODEL.md and docs/CONFIRMATIONS.md.
 SECURITY_FORK_HEIGHT = 5000
 POINTS_V4_HEIGHT = SECURITY_FORK_HEIGHT   # THE announced fork height for the points rules: slow release, 20/80 pots, 2% per-address cap, one-day payout lag.
-# (v3 never shipped; v4 replaces it at the same height.)
+# (v3 never shipped; v4 replaces it at the same height. Everything that changes at 5000 is listed in docs/POINTS_V4.md.)
 # Same height as the security fork on purpose: the live leaderboard then shows the rules that will actually pay. Under v4 the
 # first payout is at 7880 (6440 pays nothing); a node on plain 0.5.1 rules would pay at 6440 and split there.
-MAX_REORG_DEPTH = 720              # node policy from 5000: never roll back more than this (~12 h at 60 s; set 2026-10-23)
+MAX_REORG_DEPTH = 720              # node policy from 5000: never roll back more than this (~12 h at 60 s; decided 2026-10-23)
 # {"height": "hash"}; shipped with the release (may be empty). Resolved next to
 # this file so it works whatever the node's working directory (desktop app).
 CHECKPOINTS_FILE = os.environ.get(
     "NETLITHIC_CHECKPOINTS_FILE",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "checkpoints.json"),
 )
+
+
+def difficulty_rules_hash() -> str:
+    """Fingerprint of the mining-difficulty rules (LWMA window, targets, limits, seed, the security fork height, the timestamp rule and the constants used below block 5000).
+    Kept SEPARATE from points_v3_rules_hash on purpose: that one is compared at every height, so adding to it would
+    stop 0.5.3 and 0.5.4 nodes from talking to each other before block 5000 although their blocks are identical
+    until then. This one is only compared when a peer reports it (0.5.4 and newer do)."""
+    import hashlib
+    parts = [
+        "difficulty=lwma-int-1",
+        f"fork_height={LWMA_FORK_HEIGHT}",
+        f"target={LWMA_TARGET_BLOCK_TIME}",
+        f"window={LWMA_WINDOW}",
+        f"min_work={LWMA_MIN_WORK}",
+        f"seed_work={LWMA_SEED_WORK}",
+        f"step_up={LWMA_MAX_STEP_UP[0]}/{LWMA_MAX_STEP_UP[1]}",
+        f"step_down={LWMA_MAX_STEP_DOWN[0]}/{LWMA_MAX_STEP_DOWN[1]}",
+        f"max_solvetime={LWMA_MAX_SOLVETIME_FACTOR}",
+        f"mtp_window={MTP_WINDOW}",
+        f"stall={STALL_SECONDS}/{STALL_WORK_DIVISOR}",
+        f"max_future={MAX_FUTURE_BLOCK_SECONDS}",
+        # What else decides which blocks are valid, so two nodes that differ in any of it show different fingerprints:
+        f"security_fork={SECURITY_FORK_HEIGHT}",
+        f"timestamp_rule={TIMESTAMP_RULE_TAG}",
+        # The rules below block 5000 (used by every node for the first 5000 blocks and for syncing history):
+        f"pre_fork_target={TARGET_BLOCK_TIME}",
+        f"pre_fork_interval={DIFFICULTY_ADJUSTMENT_INTERVAL}",
+        f"pre_fork_default={DEFAULT_DIFFICULTY}",
+        f"pre_fork_min={MIN_DIFFICULTY}",
+        f"pre_fork_max_step={MAX_DIFFICULTY_STEP}",
+    ]
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
 
 def points_v3_rules_hash() -> str:
@@ -301,6 +350,14 @@ def is_signed_tx(tx: dict) -> bool:
     return isinstance(tx, dict) and "payload" in tx and "type" not in tx
 
 
+def _finite_tx_timestamp(value) -> float:
+    """A transaction timestamp as a float; anything that is not a real (finite) number is refused."""
+    t = float(value)
+    if not math.isfinite(t):
+        raise ValueError("Timestamp must be a finite number")
+    return t
+
+
 def normalize_multisig_tx(tx: dict) -> dict:
     p = tx.get("payload")
     if not isinstance(p, dict):
@@ -322,7 +379,7 @@ def normalize_multisig_tx(tx: dict) -> dict:
             "recipient": normalize_address(p.get("recipient")),
             "amount": amount,
             "nonce": nonce,
-            "timestamp": float(p.get("timestamp", 0)),
+            "timestamp": _finite_tx_timestamp(p.get("timestamp", 0)),
             "chain_id": p["chain_id"],
         },
         "sigs": [{"pubkey": normalize_pubkey(s.get("pubkey")), "sig": normalize_sig(s.get("sig"))}
@@ -373,7 +430,7 @@ def normalize_signed_tx(tx: dict) -> dict:
 
     amount = int(payload.get("amount", 0))
     nonce = int(payload.get("nonce", 0))
-    timestamp = float(payload.get("timestamp", 0))
+    timestamp = _finite_tx_timestamp(payload.get("timestamp", 0))
     if "fee" not in payload:
         raise ValueError("Missing fee")
     fee = int(payload.get("fee"))
@@ -481,9 +538,12 @@ class Block:
         if not isinstance(txs, list):
             raise ValueError("Block transactions must be a list")
 
+        timestamp = float(data["timestamp"])
+        if not math.isfinite(timestamp):  # header validation at parse time; same outcome as the later checks
+            raise ValueError("timestamp is not a valid time")
         return Block(
             index=int(data["index"]),
-            timestamp=float(data["timestamp"]),
+            timestamp=timestamp,
             transactions=[normalize_tx(tx) for tx in txs],
             previous_hash=str(data["previous_hash"]),
             nonce=int(data["nonce"]),
@@ -510,35 +570,55 @@ def block_work(block: "Block") -> int:
     return 16 ** int(block.difficulty)
 
 
+def finite_timestamp(t: float) -> float:
+    """A block timestamp as the difficulty and clock rules read it: a value that is not a real number
+    (not finite) counts as 0.0, so a malformed old timestamp can never make those rules raise or stall."""
+    t = float(t)
+    return t if math.isfinite(t) else 0.0
+
+
 def median_time_past(chain: List["Block"], window: int = MTP_WINDOW) -> float:
-    ts = sorted(b.timestamp for b in chain[-window:])
+    ts = sorted(finite_timestamp(b.timestamp) for b in chain[-window:])
     return ts[len(ts) // 2]
+
+
+# For anyone writing a second implementation: the LWMA arithmetic itself is integer-only (exact), but block timestamps
+# are IEEE-754 doubles. The timestamp comparisons (median-time, stall check, future-drift check) and the number that
+# goes into the block hash use those doubles as they are, so a second implementation must use the same double
+# values and the same comparisons. This is deterministic; it is simply not integer arithmetic.
+def timestamp_ms(t: float) -> int:
+    """A timestamp as whole milliseconds (rounded down), worked out exactly with integers, so the difficulty
+    rule never depends on floating-point rounding."""
+    num, den = finite_timestamp(t).as_integer_ratio()
+    return (num * 1000) // den
 
 
 def lwma_next_work(chain: List["Block"]) -> int:
     """LWMA work for the block after chain[-1], using only post-fork blocks.
     Timestamps are viewed monotonically (each at least 1s after the one before)
-    and each solve time is capped, so one lying timestamp moves work only a little."""
-    T = LWMA_TARGET_BLOCK_TIME
+    and each solve time is capped, so one lying timestamp moves work only a little.
+    Integer arithmetic only (times in milliseconds): the result is exact however large the work gets."""
+    T_ms = LWMA_TARGET_BLOCK_TIME * 1000
     last = chain[-1]
     if not is_post_fork(last.index):
-        return max(LWMA_MIN_WORK, block_work(last))  # first post-fork block: same work as before
+        # first block of the new rule: the fixed starting work (or, if that is 0, the work carried over)
+        return max(LWMA_MIN_WORK, LWMA_SEED_WORK if LWMA_SEED_WORK > 0 else block_work(last))
     post = [b for b in chain[-LWMA_WINDOW:] if is_post_fork(b.index)]
     start = chain[len(chain) - len(post) - 1] if len(chain) > len(post) else None
     blocks = ([start] if start is not None else []) + post
     if len(blocks) < 2:
         return max(LWMA_MIN_WORK, int(last.difficulty))
-    weighted = 0
+    weighted = 0          # (milliseconds x weight), an integer
     sum_work = 0
-    prev_t = blocks[0].timestamp
+    prev_t = timestamp_ms(blocks[0].timestamp)
     for i, b in enumerate(blocks[1:], start=1):
-        t = max(b.timestamp, prev_t + 1)
-        st = min(t - prev_t, LWMA_MAX_SOLVETIME_FACTOR * T)
+        t = max(timestamp_ms(b.timestamp), prev_t + 1000)
+        st = min(t - prev_t, LWMA_MAX_SOLVETIME_FACTOR * T_ms)
         prev_t = t
         weighted += st * i
         sum_work += block_work(b)
     n = len(blocks) - 1
-    nxt = int(sum_work * T * (n + 1) / (2 * weighted)) if weighted > 0 else block_work(last)
+    nxt = (sum_work * T_ms * (n + 1)) // (2 * weighted) if weighted > 0 else block_work(last)
     prev_work = block_work(last)
     hi = prev_work * LWMA_MAX_STEP_UP[0] // LWMA_MAX_STEP_UP[1]
     lo = prev_work * LWMA_MAX_STEP_DOWN[0] // LWMA_MAX_STEP_DOWN[1]
@@ -583,7 +663,7 @@ class Blockchain:
         Returns True if the chain was quarantined and reset."""
         try:
             with open(CHAIN_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
+                data = strict_json.load(f)
             bad = checkpoint_mismatches(data) if isinstance(data, list) else []
         except Exception:
             return False
@@ -707,7 +787,7 @@ class Blockchain:
             elif e is None:
                 out["address"] = {"address": address, "earns_transfer_points": False, "status": "not_listed",
                                   "why": "Not on the list. Transfers you send earn no points; mining points still count. "
-                                         "Ask the project founder for a place on the list."}
+                                         "See docs/POINTS_V4_REGISTRY.md to ask for a place on the list."}
             elif e["status"] == "pending":
                 out["address"] = {"address": address, "earns_transfer_points": False, "status": "pending",
                                   "earns_from_height": e["earns_from_height"],
@@ -784,7 +864,7 @@ class Blockchain:
 
         try:
             with open(CHAIN_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
+                data = strict_json.load(f)
 
             if not isinstance(data, list) or not data:
                 return False
@@ -904,14 +984,14 @@ class Blockchain:
             return lwma_next_work(previous_chain)
         return self.calculate_next_difficulty(previous_chain)
 
-    def allowed_difficulties(self, previous_chain: List[Block], timestamp: float) -> List[int]:
-        """Work values a new block may carry. After the fork, a block arriving
-        STALL_SECONDS or more after the previous one may use a reduced
-        "emergency" work so a hashrate drop can't freeze the chain."""
+    def difficulty_context(self, previous_chain: List[Block]):
+        """Everything allowed_difficulties needs that does NOT depend on the candidate timestamp, computed once:
+        (normal_work, stall_work or None, newest_timestamp or None). A miner computes it once per block template
+        instead of once per nonce."""
         normal = self.expected_block_difficulty(previous_chain)
         height = previous_chain[-1].index + 1
         if not is_post_fork(height):
-            return [normal]
+            return normal, None, None
         if is_security_fork(height):
             # Measure the gap from the LATEST recent timestamp (not just the
             # previous block, which a miner can backdate). This is a pure
@@ -920,11 +1000,24 @@ class Blockchain:
             # Future-dated timestamps are bounded at block acceptance
             # (MAX_FUTURE_BLOCK_SECONDS drift bound in block_reject_reason,
             # applied when a block is received or mined, not here).
-            newest = max(b.timestamp for b in previous_chain[-MTP_WINDOW:])
-            stalled = timestamp - newest >= STALL_SECONDS
+            newest = max(finite_timestamp(b.timestamp) for b in previous_chain[-MTP_WINDOW:])
         else:
-            stalled = timestamp - previous_chain[-1].timestamp >= STALL_SECONDS
-        return [normal, stall_work(normal)] if stalled else [normal]
+            newest = finite_timestamp(previous_chain[-1].timestamp)
+        return normal, stall_work(normal), newest
+
+    @staticmethod
+    def allowed_from_context(context, timestamp: float) -> List[int]:
+        """The cheap, timestamp-dependent half of allowed_difficulties (see difficulty_context)."""
+        normal, stall, newest = context
+        if stall is None:
+            return [normal]
+        return [normal, stall] if timestamp - newest >= STALL_SECONDS else [normal]
+
+    def allowed_difficulties(self, previous_chain: List[Block], timestamp: float) -> List[int]:
+        """Work values a new block may carry. After the fork, a block arriving
+        STALL_SECONDS or more after the previous one may use a reduced
+        "emergency" work so a hashrate drop can't freeze the chain."""
+        return self.allowed_from_context(self.difficulty_context(previous_chain), timestamp)
 
     # ----------------------------
     # Chain Views
@@ -1716,6 +1809,13 @@ class Blockchain:
     # ----------------------------
 
     def mine_block(self, miner_address: str, mempool: List[dict]) -> Block:
+        """Build a block template and search nonces in one call (the caller holds any node lock)."""
+        return self.solve_block_template(self.build_block_template(miner_address, mempool))
+
+    def build_block_template(self, miner_address: str, mempool: List[dict]) -> dict:
+        """The chain-reading half of mining: choose the transactions and fix everything except nonce and timestamp.
+        Fast; the caller holds the node lock while it runs. The result is plain data and does not touch the chain
+        again, so solve_block_template() can run without the lock."""
         miner_address = normalize_address(miner_address)
 
         latest = self.get_latest_block()
@@ -1805,10 +1905,34 @@ class Blockchain:
 
         post_fork = is_post_fork(next_index)
         min_ts = median_time_past(self.chain) if post_fork else latest.timestamp
+        return {
+            "index": next_index,
+            "transactions": transactions,
+            "previous_hash": previous_hash,
+            "post_fork": post_fork,
+            "min_ts": min_ts,
+            "difficulty": difficulty,
+            # the difficulty rules for this tip, computed once; the search only applies the timestamp-dependent part
+            "difficulty_context": self.difficulty_context(self.chain) if post_fork else None,
+        }
+
+    def solve_block_template(self, template: dict, should_abort=None, abort_every: int = 4096) -> Optional[Block]:
+        """The nonce search. It reads no node state, so it can run WITHOUT the node lock. If should_abort is given
+        it is polled every abort_every nonces; when it returns True the search stops and None is returned."""
+        next_index = template["index"]
+        transactions = template["transactions"]
+        previous_hash = template["previous_hash"]
+        post_fork = template["post_fork"]
+        min_ts = template["min_ts"]
+        difficulty = template["difficulty"]
+        context = template["difficulty_context"]
+        nonce = 0
         while True:
+            if should_abort is not None and nonce and nonce % abort_every == 0 and should_abort():
+                return None
             timestamp = max(time.time(), min_ts + 0.001)
             if post_fork:
-                difficulty = self.allowed_difficulties(self.chain, timestamp)[-1]
+                difficulty = self.allowed_from_context(context, timestamp)[-1]
             block_hash = self.calculate_hash(
                 index=next_index,
                 timestamp=timestamp,
@@ -1856,6 +1980,11 @@ class Blockchain:
 
             if new_block.previous_hash != previous_block.hash:
                 return "previous_hash does not match our latest block"
+
+            # A timestamp must be a real (finite) number at EVERY height, on every path that validates a block
+            # (add_block, is_valid_chain, replace_chain). Strings such as "inf" or "1e999" reach here as floats.
+            if not math.isfinite(new_block.timestamp):
+                return "timestamp is not a valid time"
 
             history = prior_chain + [previous_block]
             allowed = self.allowed_difficulties(history, new_block.timestamp)
@@ -2071,6 +2200,8 @@ class Blockchain:
                     return False
                 if not meets_pow(blk.hash, blk.difficulty, blk.index):
                     return False
+                if not math.isfinite(blk.timestamp):
+                    return False
                 if blk.difficulty not in self.allowed_difficulties(history, blk.timestamp):
                     return False
                 history.append(blk)
@@ -2161,9 +2292,7 @@ class Blockchain:
             if len(data) > self.REORG_LOG_MAX_BYTES:
                 return
 
-            def refuse_constant(name):
-                raise ValueError(f"non-finite number {name}")
-            raw = json.loads(data.decode("utf-8"), parse_constant=refuse_constant)
+            raw = strict_json.loads(data.decode("utf-8"))
             ok = self._log_number_ok
             limits = {"time": 1e12, "height": 1e12, "depth": 1e12}
 

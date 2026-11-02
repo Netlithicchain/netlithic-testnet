@@ -9,6 +9,7 @@
   LOW key_id never raises, reorg record persists, depth-3 consistency, the L1 docstring
 """
 import copy
+from conftest import read_private_doc
 import hashlib
 import importlib.util
 import json
@@ -27,7 +28,7 @@ import netlithic_version as nv
 import pause
 import registry
 import test_registry as tr
-from conftest import build_block, post, read_private_doc
+from conftest import build_block, post
 from core import Block, Blockchain
 from test_registry import (FORK, PERIOD, CID, MINER, HONEST, MERCH, KNOWN, addr, early_miner, key, pay_9320, rtx,
                            scan, second_period_traffic, synth, tx_from, use_key, chain_of, period_of)
@@ -332,13 +333,13 @@ def test_h2_registry_tool_sets_valid_until_and_has_a_rotate_command():
 
 # =========================================================================================== M1
 def test_m1_version_and_gate_constants():
-    assert nv.VERSION == nv.MIN_PEER_VERSION == "0.5.3"
+    assert nv.VERSION == nv.MIN_PEER_VERSION == "0.5.4"
     assert nv.RULES_FIELD_REQUIRED_HEIGHT == nv.UPGRADE_DEADLINE_HEIGHT == 4900
     assert not nv.rules_field_required(4899) and nv.rules_field_required(4900)
     assert nv.parse_version("0.5.1") < nv.parse_version(nv.MIN_PEER_VERSION)
 
 
-def _peer(rules, version="0.5.3"):
+def _peer(rules, version="0.5.4"):
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
     class Hh(BaseHTTPRequestHandler):
@@ -386,7 +387,7 @@ def test_m1_runbook_corrects_the_split_height_and_names_0_5_2():
 
 
 def test_m1_healthcheck_expects_0_5_2():
-    assert H.DEFAULTS["expected_version"] == "0.5.3"
+    assert H.DEFAULTS["expected_version"] == "0.5.4"
 
 
 # =========================================================================================== M2

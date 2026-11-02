@@ -14,14 +14,15 @@ Browsers need HTTPS (or localhost) for WebCrypto; put this behind TLS for real u
 """
 import argparse
 import json
+import strict_json
 import os
 import re
 import sys
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request
-from netutil import urlopen
+from netutil import urlopen, CappedThreadingHTTPServer
 
 from node_pool import DEFAULT_FALLBACK, NodePool, parse_nodes
 
@@ -66,10 +67,10 @@ class Upstream:
             h["Content-Type"] = "application/json"
         try:
             with urlopen(Request(url, data=data, headers=h), timeout=self.timeout) as r:
-                return r.status, json.loads(r.read(65536).decode() or "{}")
+                return r.status, strict_json.loads(r.read(65536).decode() or "{}")
         except HTTPError as e:
             try:
-                body = json.loads(e.read(65536).decode() or "{}")
+                body = strict_json.loads(e.read(65536).decode() or "{}")
             except Exception:
                 body = {}
             return e.code, body
@@ -293,7 +294,7 @@ def make_handler(up, trust_proxy=False, explorer="", share_base=""):
             if n < 0 or n > MAX_BODY:
                 return None
             try:
-                body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+                body = strict_json.loads(self.rfile.read(n).decode("utf-8") or "{}")
             except Exception:
                 return None
             return body if isinstance(body, dict) else None
@@ -354,7 +355,9 @@ def main(argv=None):
     except ValueError as err:
         p.error(str(err))
     print(f"Web wallet on http://{a.host}:{a.port} (nodes {a.node} then {a.fallback_node or 'none'}, faucet {a.faucet or 'off'})")
-    ThreadingHTTPServer((a.host, a.port), make_handler(Upstream(a.node, a.faucet, fallback=a.fallback_node), a.trust_proxy, a.explorer, a.share_base)).serve_forever()
+    handler = make_handler(Upstream(a.node, a.faucet, fallback=a.fallback_node), a.trust_proxy, a.explorer, a.share_base)
+    handler.timeout = 20        # drop clients that go quiet
+    CappedThreadingHTTPServer((a.host, a.port), handler, max_connections=128).serve_forever()
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-cryptography>=42,<51
+cryptography>=50.0.2,<51
 pywebview>=5.0,<7
 pyinstaller>=6.0,<7
 pillow>=10.0,<14

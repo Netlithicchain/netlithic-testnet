@@ -19,7 +19,7 @@ Please don't open a public issue or pull request for a security problem. Use one
 - The version you tested (shown in the node's `/status` or the app's About page).
 - How you'd like to be credited, or that you'd rather stay anonymous.
 
-[OPTIONAL: we aim to acknowledge within X days]
+We aim to acknowledge within 3 business days.
 
 ## Rules for testing
 Please test on your **own private network** or your own local node.
@@ -41,3 +41,4 @@ tell us if you plan to publish. We'll keep you updated, and we'll credit you if 
 
 ## Rewards
 There is no bounty program at this time.
+

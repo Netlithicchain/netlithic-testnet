@@ -43,7 +43,7 @@ PUBLIC_SITE = os.environ.get("NETLITHIC_PUBLIC_SITE", "https://testnet.netlithic
 DEFAULT_SEEDS = ["http://137.184.199.238:8000", "http://157.230.63.97:8000"]
 
 
-# Display-only anchors: {height: block hash} of already-final blocks, each read
+# Display-only anchors (red-team R1, medium): {height: block hash} of already-final blocks, each read
 # identically from both public seeds when the release was built. The app never says "up to date" unless
 # our chain (and, when it can tell, the seeds' chain) runs through every anchor at or below its tip.
 # This changes only what the app SHOWS; which blocks are valid is unchanged (that is config/checkpoints.json).

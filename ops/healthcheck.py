@@ -81,9 +81,33 @@ DEFAULTS = {
 }
 
 
-def http_json(url, timeout=8):
+MAX_REPLY_BYTES = 32 << 20  # 32 MiB; /chain passed 1 MiB on Nov 3 2026
+
+
+class ReplyTooLarge(ValueError):
+    """Reply exceeded MAX_REPLY_BYTES."""
+
+
+class TruncatedReply(ValueError):
+    """Fewer bytes than the declared Content-Length."""
+
+
+def http_json(url, timeout=8, limit=None):
+    limit = MAX_REPLY_BYTES if limit is None else limit
     with _safe_urlopen(Request(url, headers={"Accept": "application/json"}), timeout=timeout) as r:
-        return _strict_loads(r.read(1 << 20).decode() or "{}")
+        data = r.read(limit + 1)
+        if len(data) > limit:
+            raise ReplyTooLarge(f"reply larger than limit ({limit} bytes) from {url}")
+        cl = None
+        try:
+            cl = r.headers.get("Content-Length") if getattr(r, "headers", None) is not None else None
+        except Exception:
+            cl = None
+        if cl is not None and str(cl).strip().isdigit() and int(cl) != len(data):
+            if int(cl) > limit:
+                raise ReplyTooLarge(f"reply larger than limit ({limit} bytes, declared {int(cl)}) from {url}")
+            raise TruncatedReply(f"truncated reply: got {len(data)} of {int(cl)} bytes from {url}")
+        return _strict_loads(data.decode() or "{}")
 
 
 def cert_days_left(host, port=443, timeout=8):

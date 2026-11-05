@@ -188,3 +188,65 @@ coins, so they never add to the 1B supply. Miners fill blocks (max 1000 transfer
   are ignored.
 - A rejected block comes back with a `reason` (for example `"insufficient proof of work"`),
   and the reason is logged as a warning.
+- Inbound connections: every HTTP server (node, web wallet, faucet, explorer, desktop) closes a
+  connection whose request line and headers take more than 10 seconds, or whose POST body arrives
+  slower than 10 seconds plus 64 KiB per second. Each source IP gets at most 12 connections
+  (`NETLITHIC_MAX_CONNECTIONS_PER_IP`). On the node, reserved slots go only to configured
+  addresses: `--peer`, the built-in seeds and `NETLITHIC_RESERVED_IPS`. Peers learned through
+  `/hello` or gossip never get them. Configured addresses may hold up to 16 connections
+  (`NETLITHIC_MAX_CONNECTIONS_PER_TRUSTED_IP`).
+
+## Behind a reverse proxy
+
+**Never put the node's P2P port (8000) behind a proxy.** Peers and miners must connect to it
+directly, so each one is counted and capped by its own address. A proxy is for the tool servers
+(web wallet, faucet, explorer) and HTTPS only.
+
+Behind a proxy every client shares the proxy's address. Without more setup the proxy then gets
+one address's budget (12 connections) for all of its users. If the proxy runs on the same
+machine, it would also share loopback's trusted budget (16, including reserved slots) with
+every proxied client.
+
+1. List the proxy in `NETLITHIC_TRUSTED_PROXIES`, as comma-separated **IP addresses** (for
+   example `127.0.0.1` for a local Caddy). Hostnames are ignored so a DNS change can't widen
+   the set. A listed proxy is not held to the per-address cap, but each proxy can hold at most
+   half of the open (non-reserved) pool, and it never gets reserved slots. When the variable is
+   set, loopback is also removed from the node's reserved set. A node started with it prints a
+   warning: a node's P2P port should never sit behind a proxy.
+2. Let the proxy enforce the per-client limits. Keep `limit_conn` × the number of clients you
+   expect at once below the server's total cap (128 for the tool servers, 256 for a node).
+   For nginx, for example:
+
+```nginx
+limit_conn_zone $binary_remote_addr zone=perip:10m;
+server {
+    limit_conn perip 12;
+    client_header_timeout 10s;
+    client_body_timeout 10s;
+    client_max_body_size 1m;
+    proxy_request_buffering on;   # read the whole body before passing it on
+    proxy_read_timeout 30s;
+}
+```
+
+   For Caddy, set `servers { timeouts { read_header 10s read_body 10s } }`, and add a per-IP
+   connection or rate limit (for example the `rate_limit` plugin or a firewall rule).
+3. Do **not** raise `NETLITHIC_MAX_CONNECTIONS_PER_TRUSTED_IP` to make room for a proxy. A
+   proxy on a trusted address would then take the whole reserve that is meant for the seeds
+   and your `--peer` nodes.
+
+### Healthcheck
+
+Set `NETLITHIC_HEALTH_PORT` (for example `8100`) to give the node a second listener on
+`127.0.0.1` only, with its own pool of 8 connections. It answers `GET /status` and
+`GET /health` (the same status reply) and returns 404 for everything else. Point `nodes` in
+`/etc/netlithic/healthcheck.json` at it (`http://127.0.0.1:8100`). Busy public traffic, or a
+proxy, can then never lock out the local healthcheck. Without it, the healthcheck uses the
+public port like any other client.
+
+### Trusted addresses
+
+Give `--peer` and `NETLITHIC_RESERVED_IPS` as **IP addresses**, not hostnames, where you can.
+Hostnames are re-resolved every 5 minutes, and every address they return is trusted. The node
+prints the trusted set at startup and logs a line `Trusted addresses changed: added [...],
+removed [...]` whenever it changes.

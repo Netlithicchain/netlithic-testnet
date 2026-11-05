@@ -65,6 +65,7 @@ STALL_WORK_DIVISOR = 8
 # (see block_reject_reason). Timestamps are compared and hashed as IEEE 754 doubles. Change the tag if the rule changes.
 TIMESTAMP_RULE_TAG = "finite-all-heights"
 POW_LIMIT = 2 ** 256
+MAX_PRE_FORK_DIFFICULTY = 64           # leading hex zeros a 256-bit hash can have
 
 # ---- Security fork (same height as LWMA; every node must upgrade before it) ----
 # From SECURITY_FORK_HEIGHT: reorg depth limit, checkpoints, stricter stall rule,
@@ -565,9 +566,12 @@ def meets_pow(block_hash: str, difficulty: int, index: int) -> bool:
 
 def block_work(block: "Block") -> int:
     """Expected hashes for a block (old blocks: 16 per leading hex zero)."""
+    # Clamped to what proof of work can ever show (a 64-hex-digit hash; a post-fork target of 1), so a claimed
+    # difficulty can never make this a huge number. A block outside these bounds can't meet its target anyway.
+    d = max(0, int(block.difficulty))
     if is_post_fork(block.index):
-        return int(block.difficulty)
-    return 16 ** int(block.difficulty)
+        return min(d, POW_LIMIT)
+    return 16 ** min(d, MAX_PRE_FORK_DIFFICULTY)
 
 
 def finite_timestamp(t: float) -> float:
@@ -2118,7 +2122,10 @@ class Blockchain:
             common += 1
         return len(self.chain) - common
 
-    def replace_chain(self, chain_data: List[dict]) -> bool:
+    def replace_chain(self, chain_data: List[dict], prevalidated: bool = False) -> bool:
+        """prevalidated=True: the caller already ran is_valid_chain() on this exact chain_data (outside the node
+        lock). That verdict depends only on chain_data, never on our own chain, so it still holds; the depth and
+        work comparisons below always run against our chain as it is now."""
         # Cheap checks FIRST (review F4): refuse a too-deep reorg before
         # spending CPU on full validation of the incoming chain. A lying
         # "hash" field can only make depth look larger (refuse) or match our
@@ -2136,7 +2143,7 @@ class Blockchain:
                             self.last_reject_reason)
                 return False
 
-        if not self.is_valid_chain(chain_data):
+        if not prevalidated and not self.is_valid_chain(chain_data):
             return False
 
         incoming_chain = [Block.from_dict(x) for x in chain_data]
@@ -2165,7 +2172,8 @@ class Blockchain:
     REFUSED_SAVE_MIN_INTERVAL = 30.0          # seconds between sidecar writes caused by refused chains
     REFUSED_UNVALIDATED_KEEP = 2000           # timestamps kept for the "refused, not validated" volume counter
 
-    def _refused_chain_precheck(self, chain_data: List[dict], depth: int) -> bool:
+    def _refused_chain_precheck(self, chain_data: List[dict], depth: int,
+                                ours: Optional[List[Block]] = None) -> bool:
         """review N1: a CHEAP structural test (no signatures, no balances, no full validation) that a chain offered
         as a deep reorg has to pass before it may use the validation budget or be remembered. It checks that the
         part we share with the offer really is our own blocks, and that every divergent block has the right index,
@@ -2175,10 +2183,10 @@ class Blockchain:
         passes this has a tip hash that really identifies its contents, which is what makes remembering it safe.
         Passing proves nothing about the chain being valid: full validation still decides that."""
         try:
-            common = len(self.chain) - depth
+            ours = self.chain if ours is None else ours
+            common = len(ours) - depth
             if common < 1 or common >= len(chain_data):
                 return False
-            ours = self.chain
             for i in range(common):
                 x = chain_data[i]
                 if not isinstance(x, dict):
@@ -2217,7 +2225,8 @@ class Blockchain:
         dq.append(now)
         self.__dict__["_refused_unvalidated_total"] = self.__dict__.get("_refused_unvalidated_total", 0) + 1
 
-    def _note_refused_deep_reorg(self, chain_data: List[dict], depth: int) -> None:
+    def _note_refused_deep_reorg(self, chain_data: List[dict], depth: int, ours: Optional[List[Block]] = None,
+                                 record=None) -> None:
         """Called for an offered chain we refuse for depth alone (the refusal itself has already been decided).
         It only decides whether to COUNT it as a real refused deep reorg (an alert input):
           1. cheap structural precheck; a chain that fails it is junk: counted as 'not validated', nothing else
@@ -2229,7 +2238,7 @@ class Blockchain:
              cannot claim somebody else's tip hash."""
         try:
             now = time.time()
-            if not self._refused_chain_precheck(chain_data, depth):
+            if not self._refused_chain_precheck(chain_data, depth, ours=ours):
                 self._count_refused_unvalidated(now)
                 return
             tip = chain_data[-1].get("hash")
@@ -2250,7 +2259,7 @@ class Blockchain:
             while len(book) > self.REFUSED_SEEN_KEEP:
                 book.popitem(last=False)
             if valid:
-                self.record_rejected_reorg(depth, now=now)
+                (record or self.record_rejected_reorg)(depth, now=now)
         except Exception:
             return
 

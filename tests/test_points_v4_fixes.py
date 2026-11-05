@@ -333,7 +333,7 @@ def test_h2_registry_tool_sets_valid_until_and_has_a_rotate_command():
 
 # =========================================================================================== M1
 def test_m1_version_and_gate_constants():
-    assert nv.VERSION == nv.MIN_PEER_VERSION == "0.5.4"
+    assert nv.VERSION == "0.5.5" and nv.MIN_PEER_VERSION == "0.5.4"
     assert nv.RULES_FIELD_REQUIRED_HEIGHT == nv.UPGRADE_DEADLINE_HEIGHT == 4900
     assert not nv.rules_field_required(4899) and nv.rules_field_required(4900)
     assert nv.parse_version("0.5.1") < nv.parse_version(nv.MIN_PEER_VERSION)

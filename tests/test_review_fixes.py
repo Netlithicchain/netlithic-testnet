@@ -92,7 +92,7 @@ def test_version_parsing():
     assert nv.parse_version(None) == (0, 0, 0)
     assert nv.parse_version("garbage") == (0, 0, 0)
     assert nv.is_outdated(None) and nv.is_outdated("0.4.9")
-    assert nv.MIN_PEER_VERSION == "0.5.4" and nv.VERSION == nv.MIN_PEER_VERSION
+    assert nv.MIN_PEER_VERSION == "0.5.4" and nv.VERSION == "0.5.5"
     assert nv.is_outdated("0.5.0")  # 0.5.0 has no pause key; it would fork off at the first pause block
     assert nv.is_outdated("0.5.1")      # a plain 0.5.1 node has no registry and no flat block points: it splits at 6440
     assert nv.is_outdated("0.5.3") and not nv.is_outdated("0.5.4") and not nv.is_outdated("1.0.0")
@@ -244,6 +244,6 @@ def test_short_epoch_bound_to_shipped_chain_id():
 
 def test_version_locked_everywhere():
     import netlithic_version
-    assert netlithic_version.VERSION == "0.5.4"
+    assert netlithic_version.VERSION == "0.5.5"
     iss = open(os.path.join(ROOT, "desktop", "netlithic.iss"), encoding="utf-8").read()
     assert f"AppVersion={netlithic_version.VERSION}\n" in iss

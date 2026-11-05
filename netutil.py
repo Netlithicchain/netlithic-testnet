@@ -185,6 +185,43 @@ def trusted_proxies_from_env(env=None):
     return frozenset(out)
 
 
+class _DeadlineWriter(io.RawIOBase):
+    """Wraps a handler's wfile. The first write of a reply arms one deadline for the whole
+    reply (reply_deadline_base + size hint / reply_min_rate seconds); the handler cancels it
+    when the request ends."""
+
+    def __init__(self, handler, raw):
+        super().__init__()
+        self._h, self._raw = handler, raw
+
+    def writable(self):
+        return True
+
+    def write(self, b):
+        h = self._h
+        if not getattr(h, "_reply_armed", False):
+            server = getattr(h, "server", None)
+            base = getattr(server, "reply_deadline_base", 30)
+            rate = getattr(server, "reply_min_rate", 64 * 1024)
+            size = max(len(b), getattr(h, "_reply_size_hint", 0) or 0)
+            h._arm_deadline(base + size / rate)
+            h._reply_armed = True
+        return self._raw.write(b)
+
+    def flush(self):
+        if self.closed or self._raw.closed:
+            return None
+        return self._raw.flush()
+
+    def close(self):
+        if self.closed:
+            return
+        try:
+            super().close()         # runs our flush while the raw stream is still open
+        finally:
+            self._raw.close()
+
+
 class _DeadlineHandler:
     """Mixed into every handler served by CappedThreadingHTTPServer.
 
@@ -197,6 +234,13 @@ class _DeadlineHandler:
     (GET, or a body over the size limit, which the handler refuses) arm no body limit."""
 
     _BODY_METHODS = ("POST", "PUT", "PATCH")
+
+    def setup(self):
+        super().setup()
+        # Reply-phase deadline: every write must finish within
+        # reply_deadline_base + len(data) / reply_min_rate seconds, or the socket is shut
+        # and the handler thread is freed. A reader that stops reading can't hold a thread.
+        self.wfile = _DeadlineWriter(self, self.wfile)
 
     def _arm_deadline(self, seconds):
         self._cancel_deadline()
@@ -217,13 +261,28 @@ class _DeadlineHandler:
             t.cancel()
             self._deadline = None
 
+    def send_header(self, keyword, value):
+        # Size the reply deadline from the declared body length, for every handler (not only the
+        # ones that set _reply_size_hint themselves), so a large reply read at the minimum rate isn't cut.
+        if str(keyword).lower() == "content-length":
+            try:
+                n = int(value)
+            except (TypeError, ValueError):
+                n = 0
+            if n > (getattr(self, "_reply_size_hint", 0) or 0):
+                self._reply_size_hint = n
+        super().send_header(keyword, value)
+
     def handle_one_request(self):
         self._arm_deadline(self.server.header_deadline)
         stream = self.rfile
+        self._reply_armed = False
+        self._reply_size_hint = 0
         try:
             super().handle_one_request()
         finally:
             self._cancel_deadline()
+            self._reply_armed = False
             self.rfile = stream
 
     def parse_request(self):
@@ -260,7 +319,8 @@ class CappedThreadingHTTPServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler, max_connections=256,
                  max_per_ip=None, reserved_slots=0, reserved_ips=(), trusted_max_per_ip=None,
                  header_deadline=10, body_deadline_base=10, body_min_rate=64 * 1024,
-                 max_body_bytes=1024 * 1024, trusted_proxies=None, proxy_share=0.5):
+                 max_body_bytes=1024 * 1024, trusted_proxies=None, proxy_share=0.5,
+                 reply_deadline_base=30, reply_min_rate=64 * 1024):
         if not issubclass(handler, _DeadlineHandler):
             handler = type(handler.__name__, (_DeadlineHandler, handler), {})
         super().__init__(server_address, handler)
@@ -268,6 +328,8 @@ class CappedThreadingHTTPServer(ThreadingHTTPServer):
         self.body_deadline_base = body_deadline_base
         self.body_min_rate = body_min_rate
         self.max_body_bytes = max_body_bytes
+        self.reply_deadline_base = reply_deadline_base
+        self.reply_min_rate = reply_min_rate
         total = max_connections
         reserved = max(0, min(reserved_slots, total - 1))
         self.max_per_ip = max_per_ip or total

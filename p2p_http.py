@@ -1,6 +1,7 @@
 import hmac
 import ipaddress
 import json
+import logging
 import strict_json
 import os
 import re
@@ -16,7 +17,7 @@ from netutil import urlopen, is_public_ip, CappedThreadingHTTPServer, normalize_
 import netlithic_version
 import pause
 import registry
-from core import SECURITY_FORK_HEIGHT, Blockchain, PreviewBusy, normalize_address, tx_id, normalize_tx, is_reward_tx, is_post_fork, points_v3_rules_hash, difficulty_rules_hash
+from core import SECURITY_FORK_HEIGHT, MAX_REORG_DEPTH, Block, Blockchain, block_work, is_security_fork, PreviewBusy, normalize_address, tx_id, normalize_tx, is_reward_tx, is_post_fork, points_v3_rules_hash, difficulty_rules_hash
 import economics
 from economics import format_points, to_nlt
 
@@ -91,23 +92,59 @@ def _foreign_chain(data) -> bool:
 BLOCK_INDEX_RE = re.compile(r"[0-9]{1,12}")   # GET /block?index=N: ASCII digits only
 
 
-def _json_response(handler, status_code, payload):
+def _encode_json(handler, status_code, payload):
     try:
-        try:
-            # Strict JSON: never emit the non-standard number tokens (not-a-number, infinity) that a browser's JSON.parse rejects.
-            body = json.dumps(payload, indent=2, allow_nan=False).encode("utf-8")
-        except ValueError:
-            # A value that is not a real number reached the output; answer with a fixed, valid error instead of crashing.
-            print(f"Refused to send a response containing a non-finite number ({getattr(handler, 'path', '?')})")
-            status_code = 500
-            body = b'{"error": "Internal error: response contained a value that is not a valid number"}'
+        # Strict JSON: never emit the non-standard number tokens (not-a-number, infinity) that a browser's JSON.parse rejects.
+        return status_code, json.dumps(payload, indent=2, allow_nan=False).encode("utf-8")
+    except ValueError:
+        # A value that is not a real number reached the output; answer with a fixed, valid error instead of crashing.
+        print(f"Refused to send a response containing a non-finite number ({getattr(handler, 'path', '?')})")
+        return 500, b'{"error": "Internal error: response contained a value that is not a valid number"}'
+
+
+def _write_reply(handler, status_code, body):
+    handler._reply_size_hint = len(body)    # sizes the reply deadline (netutil._DeadlineWriter)
+    try:
         handler.send_response(status_code)
         handler.send_header("Content-Type", "application/json")
         handler.send_header("Content-Length", str(len(body)))
         handler.end_headers()
         handler.wfile.write(body)
-    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-        pass
+    except OSError:
+        # client went away, or the reply deadline shut a stalled connection
+        handler.close_connection = True
+
+
+def _json_response(handler, status_code, payload):
+    """Encode the reply now (so it is a snapshot of state taken under whatever lock the
+    caller holds) but, for node handlers, send it only after the handler returns and every
+    lock is released. Network writes never happen while state_lock or mine_lock is held."""
+    status_code, body = _encode_json(handler, status_code, payload)
+    if getattr(handler, "_defer_replies", False):
+        handler._pending_reply = (status_code, body)
+        return
+    _write_reply(handler, status_code, body)
+
+
+def _chain_body():
+    """GET /chain body, cached per tip. Call with state_lock held."""
+    tip = blockchain.get_latest_block()
+    key = (len(blockchain.chain), getattr(tip, "hash", None))
+    cached = _chain_cache.get("v")
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    _code, body = _encode_json(None, 200, {
+        "chain_id": chain_id(),
+        "length": len(blockchain.chain),
+        "work": blockchain.chain_work(),
+        "chain": blockchain.to_list(),
+    })
+    if _code == 200:
+        _chain_cache["v"] = (key, body)
+    return body
+
+
+_chain_cache = {}
 
 
 def strict_json_loads(text):
@@ -1013,6 +1050,130 @@ def _broadcast_tx(tx: dict, exclude_peer: str = None):
             continue
 
 
+# Sync is checked in stages so that a peer's offer costs us the node lock only for the final, cheap swap:
+#   1. same length and tip as ours: nothing to do;
+#   2. a tip this peer already offered and that we rejected: skipped until its backoff runs out;
+#   3. cheap structure and proof-of-work check of the blocks that differ from ours (no lock);
+#   4. work compared, using only blocks that passed step 3 (so every difficulty is one consensus allows);
+#   5. full validation of the offered chain (no lock; the verdict depends only on the offered chain);
+#   6. under the lock: replace_chain re-checks depth and work against our chain as it is NOW, then swaps.
+# A peer's claims can only make us skip ITS offer; adopting a chain always needs steps 3-6 to pass.
+SYNC_BAD_TIP_BACKOFF_MIN = 60.0
+SYNC_BAD_TIP_BACKOFF_MAX = 3600.0
+SYNC_BAD_TIP_KEEP = 256
+_sync_bad_tips = OrderedDict()       # peer -> (tip hash, retry-after monotonic time, current backoff)
+_sync_stats_lock = threading.Lock()
+_sync_stats = {"identical": 0, "backoff": 0, "precheck_failed": 0, "lower_work": 0,
+               "lower_work_deep_forks": 0, "deep_refused": 0, "invalid": 0, "adopted": 0}
+_log = logging.getLogger("netlithic.sync")
+_sync_last_deep_fork = OrderedDict()  # peer -> depth of the last deep lower-work fork it offered (bounded, see below)
+SYNC_DEEP_FORK_KEEP = 256            # same bound as _sync_bad_tips; the oldest entries are dropped first
+
+
+def _sync_note_deep_fork(peer: str, depth: int) -> None:
+    """Remember that `peer` sits on a deep lower-work fork. Bounded to SYNC_DEEP_FORK_KEEP entries and kept only
+    for peers we still know, so a stream of made-up peer names cannot grow it without limit."""
+    with _sync_stats_lock:
+        _sync_last_deep_fork[peer] = depth
+        _sync_last_deep_fork.move_to_end(peer)
+        while len(_sync_last_deep_fork) > SYNC_DEEP_FORK_KEEP:
+            _sync_last_deep_fork.popitem(last=False)
+
+
+def _sync_prune_deep_forks(known_peers) -> None:
+    """Drop entries for peers we no longer have (called once per sync round)."""
+    known = set(known_peers)
+    with _sync_stats_lock:
+        for p in [p for p in _sync_last_deep_fork if p not in known]:
+            del _sync_last_deep_fork[p]
+
+
+def _sync_count(key: str, n: int = 1) -> None:
+    with _sync_stats_lock:
+        _sync_stats[key] = _sync_stats.get(key, 0) + n
+
+
+def _sync_info() -> dict:
+    with _sync_stats_lock:
+        out = {f"sync_skipped_{k}": v for k, v in _sync_stats.items() if k != "adopted"}
+        out["sync_adopted"] = _sync_stats.get("adopted", 0)
+        out["sync_peers_on_deep_lower_work_fork"] = len(_sync_last_deep_fork)
+    return out
+
+
+def _sync_backoff_active(peer: str, tip) -> bool:
+    with _sync_stats_lock:
+        entry = _sync_bad_tips.get(peer)
+        return entry is not None and entry[0] == tip and time.monotonic() < entry[1]
+
+
+def _sync_mark_bad(peer: str, tip) -> None:
+    with _sync_stats_lock:
+        entry = _sync_bad_tips.get(peer)
+        wait = SYNC_BAD_TIP_BACKOFF_MIN
+        if entry is not None and entry[0] == tip:
+            wait = min(SYNC_BAD_TIP_BACKOFF_MAX, entry[2] * 2)
+        _sync_bad_tips[peer] = (tip, time.monotonic() + wait, wait)
+        _sync_bad_tips.move_to_end(peer)
+        while len(_sync_bad_tips) > SYNC_BAD_TIP_KEEP:
+            _sync_bad_tips.popitem(last=False)
+
+
+def _record_rejected_reorg_locked(depth: int, now: float) -> None:
+    """Only the short bookkeeping step (list append, rate-limited disk write) runs under the node lock."""
+    with state_lock:
+        blockchain.record_rejected_reorg(depth, now=now)
+
+
+def _sync_precheck(peer: str, chain_data: list) -> bool:
+    """Steps 1-5 above, without the node lock. Returns None (skip), "deep" (a too-deep reorg: let replace_chain
+    refuse it and count it) or "valid" (fully validated; worth the locked swap)."""
+    if not isinstance(chain_data, list) or not chain_data or not isinstance(chain_data[-1], dict):
+        return None
+    ours = list(blockchain.chain)       # one atomic copy; a stale view can only cost or save one round
+    tip = chain_data[-1].get("hash")
+    if len(chain_data) == len(ours) and tip == ours[-1].hash:
+        _sync_count("identical")
+        return None
+    if _sync_backoff_active(peer, tip):
+        _sync_count("backoff")
+        return None
+    n = min(len(ours), len(chain_data))
+    common = 0
+    while common < n and isinstance(chain_data[common], dict) and chain_data[common].get("hash") == ours[common].hash:
+        common += 1
+    depth = len(ours) - common
+    if common >= len(chain_data):
+        _sync_count("lower_work")       # the offer is a prefix of our chain
+        return None
+    if is_security_fork(ours[-1].index) and depth > MAX_REORG_DEPTH:
+        # Too deep to ever adopt. Judge it for the deep-reorg counters/alerts HERE, outside the node lock (cheap
+        # precheck, then at most one budgeted full validation), back off this tip, and never take the lock for it.
+        _sync_count("deep_refused")
+        _sync_mark_bad(peer, tip)
+        _sync_note_deep_fork(peer, depth)
+        blockchain._note_refused_deep_reorg(chain_data, depth, ours=ours, record=_record_rejected_reorg_locked)
+        return None
+    if not blockchain._refused_chain_precheck(chain_data, depth, ours=ours):
+        _sync_count("precheck_failed")
+        _sync_mark_bad(peer, tip)
+        return None
+    # every block from `common` on now has a consensus-allowed difficulty that its hash really meets
+    offered = blockchain.chain_work(ours[:common]) + sum(block_work(Block.from_dict(x)) for x in chain_data[common:])
+    if offered <= blockchain.chain_work(ours):
+        _sync_count("lower_work")
+        if depth > MAX_REORG_DEPTH:
+            _sync_count("lower_work_deep_forks")
+            _sync_note_deep_fork(peer, depth)
+            _log.info("sync: peer %s offers a lower-work fork %d blocks deep; ignored", peer, depth)
+        return None
+    if not blockchain.is_valid_chain(chain_data):
+        _sync_count("invalid")
+        _sync_mark_bad(peer, tip)
+        return None
+    return "valid"
+
+
 def _sync_with_peer(peer: str):
     try:
         data = _get_json(f"{peer}/chain", deadline_seconds=CHAIN_FETCH_DEADLINE_SECONDS)
@@ -1022,14 +1183,23 @@ def _sync_with_peer(peer: str):
 
         if not incoming_chain:
             return
+        verdict = _sync_precheck(peer, incoming_chain)
+        if verdict is None:
+            return
+        if verdict == "valid":
+            with _sync_stats_lock:
+                _sync_last_deep_fork.pop(peer, None)
+        prevalidated = verdict == "valid"
 
         with state_lock:
             old_chain = list(blockchain.chain)
-            replaced = blockchain.replace_chain(incoming_chain)
+            replaced = blockchain.replace_chain(incoming_chain, prevalidated=prevalidated)
             if replaced:
                 _remove_confirmed_txs_from_mempool()
                 _requeue_orphaned_txs(old_chain)
                 _revalidate_mempool()
+        if replaced:
+            _sync_count("adopted")
     except Exception:
         pass
 
@@ -1045,6 +1215,7 @@ def _sync_loop():
 
             _recheck_known_peers()
             _prune_seen()
+            _sync_prune_deep_forks(peers)
         except Exception:
             pass
 
@@ -1207,6 +1378,18 @@ def _start_health_listener(port):
 
 class P2PHandler(BaseHTTPRequestHandler):
     timeout = INBOUND_READ_TIMEOUT_SECONDS
+    _defer_replies = True
+
+    def handle_one_request(self):
+        # Routes build their reply (under state_lock where needed); the reply is written here,
+        # after the route returned and released every lock.
+        self._pending_reply = None
+        try:
+            super().handle_one_request()
+        finally:
+            pending, self._pending_reply = self._pending_reply, None
+            if pending is not None:
+                _write_reply(self, *pending)
 
 
     def log_message(self, format, *args):
@@ -1219,16 +1402,9 @@ class P2PHandler(BaseHTTPRequestHandler):
 
         if path == "/chain":
             with state_lock:
-                return _json_response(
-                    self,
-                    200,
-                    {
-                        "chain_id": chain_id(),
-                        "length": len(blockchain.chain),
-                        "work": blockchain.chain_work(),
-                        "chain": blockchain.to_list(),
-                    },
-                )
+                body = _chain_body()
+            self._pending_reply = (200, body)
+            return
 
         if path == "/block":
             # One block by height (read-only, one block of data). Lets a light client check
@@ -1295,6 +1471,7 @@ class P2PHandler(BaseHTTPRequestHandler):
                         "points_rules": points_v3_rules_hash(),
                         "difficulty_rules": difficulty_rules_hash(),
                         **blockchain.reorg_info(),
+                        **_sync_info(),
                         "security_fork_height": SECURITY_FORK_HEIGHT,
                         "fork_ready": True,
                         "pause_enabled": bool(pause.PAUSE_PUBKEY),
@@ -1525,7 +1702,7 @@ class P2PHandler(BaseHTTPRequestHandler):
             if not peer_address_allowed(normalized):  # review R1: before any fetch
                 raise ValueError("Peer address not allowed (private, loopback, link-local or unresolvable); "
                                  "set NETLITHIC_ALLOW_PRIVATE_PEERS=1 for a local test network")
-            # A peer that never answers /status within the hello timeout is not added.
+            # Red-team R1: a peer that never answers /status within the hello timeout is not added.
             reason = _gate_check_url(normalized, strict=True)
             if reason:
                 raise ValueError(reason)

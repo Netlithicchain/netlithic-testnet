@@ -23,7 +23,7 @@ def _read(*parts):
 # ---- N3 ----------------------------------------------------------------------------------------------------------
 
 def test_n3_version_and_minimum_are_0_5_4():
-    assert nv.VERSION == nv.MIN_PEER_VERSION == "0.5.4"
+    assert nv.VERSION == "0.5.5" and nv.MIN_PEER_VERSION == "0.5.4"
 
 
 @pytest.mark.parametrize("v", ["0.5.0", "0.5.1", "0.5.2", "0.5.2-rc1", "0.5.3", "0.5.3-rc1", "0.5.4-rc1"])
@@ -33,7 +33,7 @@ def test_n3_builds_before_0_5_3_are_outdated(v):
 
 def test_n3_installer_version_matches():
     iss = _read("desktop", "netlithic.iss")
-    assert re.search(r"^AppVersion=0\.5\.4\s*$", iss, re.M)
+    assert re.search(r"^AppVersion=0\.5\.5\s*$", iss, re.M)
 
 
 def test_n3_healthcheck_expects_0_5_4():

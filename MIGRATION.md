@@ -1,5 +1,24 @@
 # Migrations
 
+## 0.5.5 (recommended soft upgrade)
+
+### Who needs to upgrade
+Recommended for everyone who runs a node. 0.5.5 improves networking stability and does **not** change consensus or the peer version gate. `MIN_PEER_VERSION` stays 0.5.4, so 0.5.4 and 0.5.5 peers still talk and agree on every block.
+
+You do **not** have to move to 0.5.5 before block 4900. Nodes on 0.5.4 remain valid through the block-4900 gate and the block-5000 difficulty change. Upgrading is still a good idea so your node stays responsive under load. Your data and wallets are kept.
+
+### Upgrade steps (running from source)
+1. Get the v0.5.5 code:
+   `git fetch --tags origin` and then `git checkout v0.5.5`
+   (or download the v0.5.5 source archive from the v0.5.5 release page on GitHub).
+2. Stop your node (Ctrl+C in its window, or stop its service).
+3. Update the dependencies: `pip install -r requirements.txt`
+4. Start the node again the way you normally do, for example `python netlithic.py node start 8000`.
+5. Check it: open http://127.0.0.1:8000/status (or run `python netlithic.py status`). It should show `"version": "0.5.5"`.
+
+### What changed
+Networking stability fixes (replies after the node lock is released, reply time limits, peer-chain checks before taking the lock, deep-fork offers judged outside the lock with backoff), a more patient founder miner, and a 32 MiB healthcheck reply cap. No consensus or rules-fingerprint change.
+
 ## 0.5.4 (required before block 4900)
 
 ### Who needs to upgrade

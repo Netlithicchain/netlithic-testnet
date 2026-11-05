@@ -59,7 +59,7 @@ def gate_on(monkeypatch):
 
 
 def test_release_version_is_0_5_4_and_the_gate_height_is_unchanged():
-    assert nv.VERSION == nv.MIN_PEER_VERSION == "0.5.4"
+    assert nv.VERSION == "0.5.5" and nv.MIN_PEER_VERSION == "0.5.4"
     assert nv.UPGRADE_DEADLINE_HEIGHT == 4900 and nv.RULES_FIELD_REQUIRED_HEIGHT == 4900
     assert nv.is_outdated("0.5.3") and not nv.is_outdated("0.5.4")
 

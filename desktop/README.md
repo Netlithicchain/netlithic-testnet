@@ -9,7 +9,13 @@ Test coins have no value.
   The secret key is made in the window, locked with the user's password and saved only
   in `%LOCALAPPDATA%\Netlithic\testnet\window`. The Python side only sees the address.
 - **Start helping** mines blocks to the user's address on their own node, one try every
-  60 seconds (`NETLITHIC_MINE_PACE`), only once the node has caught up.
+  60 seconds (`NETLITHIC_MINE_PACE`), only while its newest block is the SAME block the
+  public seeds have (height and block hash, not just height). If its copy has drifted onto
+  a different chain the window says "Not on the network" and helping pauses by itself; the
+  node keeps pulling from the seeds and takes over their chain as soon as it has more work
+  (full validation, checkpoints and pause rules; wallet and keys are never touched).
+  If the app is ahead by blocks the seeds have not taken yet, it hands them the next block
+  itself (a normal peer push, so it works behind a home router).
 - Free test coins come from the public site; explorer links open the public explorer
   in the normal browser.
 

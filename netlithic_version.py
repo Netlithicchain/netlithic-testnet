@@ -21,6 +21,10 @@
         below 5000 are checked exactly as in 0.5.3, so 0.5.3 and 0.5.4 nodes agree on every block until 5000 and
         split at 5000. The version gate is raised to 0.5.4 (still enforced from block 4900), so every node must run
         0.5.4 before block 4900.
+0.5.5 = 0.5.4 plus networking stability fixes (replies are sent after the node lock is released, every reply has a
+        time limit, peer chains are checked before the lock is taken, deep-fork offers are judged outside the lock
+        with backoff) and a more patient founder miner. No consensus or rules-fingerprint change: MIN_PEER_VERSION
+        stays 0.5.4, so 0.5.4 and 0.5.5 nodes peer and agree on every block.
 A node is "fork-ready" when it enforces the rules that switch on at
 SECURITY_FORK_HEIGHT; /status reports both so the explorer can count upgraded nodes.
 
@@ -35,7 +39,7 @@ Peer gate (peer level only, NOT block validity): it decides who we talk to, neve
 """
 import re
 
-VERSION = "0.5.4"
+VERSION = "0.5.5"
 FORK_READY_HEIGHT = 5000   # must equal core.SECURITY_FORK_HEIGHT (checked in tests)
 
 

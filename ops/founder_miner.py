@@ -68,9 +68,25 @@ def decide(height, latest_timestamp, now, last_own_mine, stop_height=5000, backs
     return True, f"backstop: no block from anyone for {int(idle // 60)} min"
 
 
-def _get(url, timeout=15):
-    with _safe_urlopen(Request(url, headers={"Accept": "application/json"}), timeout=timeout) as r:
-        return _strict_loads(r.read().decode() or "{}")
+HTTP_TIMEOUT_SECONDS = 60     # was 15; a busy node can take longer than 15 s to answer /status or /chain
+HTTP_RETRIES = 3              # extra attempts after the first one, for read-only GETs only
+HTTP_BACKOFF_SECONDS = 2.0    # wait 2 s, 4 s, 8 s between attempts
+
+
+def _get(url, timeout=HTTP_TIMEOUT_SECONDS, retries=HTTP_RETRIES, backoff=HTTP_BACKOFF_SECONDS, sleep=time.sleep):
+    """GET a JSON document. Network errors and timeouts (OSError, which includes URLError and socket.timeout) are
+    retried with exponential backoff; a bad JSON body is not retried. Only used for read-only GETs: the /mine POST
+    is never retried, so a slow answer can never make two blocks."""
+    attempt = 0
+    while True:
+        try:
+            with _safe_urlopen(Request(url, headers={"Accept": "application/json"}), timeout=timeout) as r:
+                return _strict_loads(r.read().decode() or "{}")
+        except OSError:
+            if attempt >= retries:
+                raise
+            sleep(backoff * (2 ** attempt))
+            attempt += 1
 
 
 def main(argv=None):
